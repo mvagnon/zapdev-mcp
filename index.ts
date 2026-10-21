@@ -36,7 +36,7 @@ function ensureDirectory(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
-const server = new McpServer({ name: "get-repo", version: "1.0.0" });
+const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
 server.registerTool(
   "get_repo",
