@@ -1,14 +1,30 @@
 {
   "name": "zapdev-mcp",
   "version": "1.0.0",
-  "private": true,
+  "description": "MCP server for zapdev repository, commit and pull request tools.",
   "type": "module",
+  "bin": {
+    "zapdev-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mvagnon/zapdev-mcp.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "start": "tsx index.ts",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc --noEmit false --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test index.test.ts",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
