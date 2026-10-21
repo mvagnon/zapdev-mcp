@@ -10,7 +10,7 @@ import {
   rmSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -176,6 +176,67 @@ server.registerTool(
       } finally {
         rmdirSync(lock);
       }
+    } catch (error) {
+      const output = {
+        error: error instanceof Error ? error.message : String(error),
+      };
+      return {
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify(output) }],
+      };
+    }
+  },
+);
+
+server.registerTool(
+  "commit",
+  {
+    description:
+      "Commit all changes in a local Git repository using the installed zapdev CLI. " +
+      "Always uses --yes --pull --no-push and the supplied --branch. " +
+      "Pulls fast-forward updates when an upstream is configured; never pushes. " +
+      "Sends commit context to the configured zapdev LLM endpoint. " +
+      "Requires zapdev with --branch support and its ZD_* environment configuration.",
+    inputSchema: z
+      .object({
+        path: z
+          .string()
+          .refine(isAbsolute, "Expected an absolute repository path.")
+          .describe("Absolute path inside the Git repository to commit."),
+        branch: z
+          .string()
+          .min(1)
+          .describe("Local branch to switch to or create before committing."),
+        type: z
+          .string()
+          .regex(/^(auto|(?:feat|fix|deps|chore|docs|style|refactor|perf|test|build|ci|revert)!?)$/)
+          .default("auto")
+          .describe("Conventional Commit type, optionally ending in !; auto lets zapdev choose."),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  },
+  async ({ path, branch, type }) => {
+    try {
+      await git(path, "rev-parse", "--show-toplevel");
+      await git(path, "check-ref-format", "--branch", branch);
+      const { stdout, stderr } = await exec(
+        "zapdev",
+        [
+          "commit", "--yes", "--pull", "--no-push", `--branch=${branch}`,
+          ...(type === "auto" ? [] : [`--type=${type}`]),
+        ],
+        {
+          cwd: path,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" },
+          timeout: 180_000,
+        },
+      );
+      const output = { stdout: stdout.trim(), stderr: stderr.trim() };
+      return {
+        content: [{ type: "text", text: JSON.stringify(output) }],
+        structuredContent: output,
+      };
     } catch (error) {
       const output = {
         error: error instanceof Error ? error.message : String(error),
