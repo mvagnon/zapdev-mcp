@@ -14,6 +14,7 @@ import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 const exec = promisify(execFile);
@@ -35,6 +36,46 @@ function ensureDirectory(path: string): void {
   }
   mkdirSync(path, { recursive: true });
 }
+
+/** Run zapdev through npx in one repository, returning CLI output or an MCP error. */
+async function zapdev(path: string, args: string[], branch?: string): Promise<CallToolResult> {
+  try {
+    await git(path, "rev-parse", "--show-toplevel");
+    if (branch !== undefined) await git(path, "check-ref-format", "--branch", branch);
+    const { stdout, stderr } = await exec(
+      "npx",
+      ["--yes", "zapdev", ...args, ...(branch ? [`--branch=${branch}`] : [])],
+      {
+        cwd: path,
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: "0",
+          GCM_INTERACTIVE: "Never",
+          GH_PROMPT_DISABLED: "1",
+        },
+        timeout: 180_000,
+      },
+    );
+    const output = { stdout: stdout.trim(), stderr: stderr.trim() };
+    return {
+      content: [{ type: "text", text: JSON.stringify(output) }],
+      structuredContent: output,
+    };
+  } catch (error) {
+    const output = {
+      error: error instanceof Error ? error.message : String(error),
+    };
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify(output) }],
+    };
+  }
+}
+
+const repositoryPath = z
+  .string()
+  .refine(isAbsolute, "Expected an absolute repository path.")
+  .describe("Absolute path inside the Git repository.");
 
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
@@ -192,17 +233,14 @@ server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes in a local Git repository using the installed zapdev CLI. " +
+      "Commit all changes in a local Git repository using npx --yes zapdev. " +
       "Always uses --yes --pull --no-push and the supplied --branch. " +
       "Pulls fast-forward updates when an upstream is configured; never pushes. " +
       "Sends commit context to the configured zapdev LLM endpoint. " +
-      "Requires zapdev with --branch support and its ZD_* environment configuration.",
+      "Requires npx and ZD_* environment configuration; no global zapdev installation needed.",
     inputSchema: z
       .object({
-        path: z
-          .string()
-          .refine(isAbsolute, "Expected an absolute repository path.")
-          .describe("Absolute path inside the Git repository to commit."),
+        path: repositoryPath,
         branch: z
           .string()
           .min(1)
@@ -216,37 +254,42 @@ server.registerTool(
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
-  async ({ path, branch, type }) => {
-    try {
-      await git(path, "rev-parse", "--show-toplevel");
-      await git(path, "check-ref-format", "--branch", branch);
-      const { stdout, stderr } = await exec(
-        "zapdev",
-        [
-          "commit", "--yes", "--pull", "--no-push", `--branch=${branch}`,
-          ...(type === "auto" ? [] : [`--type=${type}`]),
-        ],
-        {
-          cwd: path,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" },
-          timeout: 180_000,
-        },
-      );
-      const output = { stdout: stdout.trim(), stderr: stderr.trim() };
-      return {
-        content: [{ type: "text", text: JSON.stringify(output) }],
-        structuredContent: output,
-      };
-    } catch (error) {
-      const output = {
-        error: error instanceof Error ? error.message : String(error),
-      };
-      return {
-        isError: true,
-        content: [{ type: "text", text: JSON.stringify(output) }],
-      };
-    }
+  async ({ path, branch, type }) => zapdev(path, [
+    "commit", "--yes", "--pull", "--no-push",
+    ...(type === "auto" ? [] : [`--type=${type}`]),
+  ], branch),
+);
+
+server.registerTool(
+  "pr",
+  {
+    description:
+      "Push the current branch and create a GitHub pull request using npx --yes zapdev pr --yes. " +
+      "Requires a clean working tree, npx, authenticated GitHub CLI (gh), and ZD_* configuration. " +
+      "Sends full branch commit messages to the configured LLM endpoint to generate the title. " +
+      "Builds the description from commits and optionally appends a Closes task URL. " +
+      "Never force-pushes; no global zapdev installation needed. Do not retry blindly after errors: " +
+      "the branch may already have been pushed or the PR created.",
+    inputSchema: z
+      .object({
+        path: repositoryPath,
+        branch: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Target branch of the PR; defaults to the GitHub repository's default branch."),
+        closes: z
+          .url({ protocol: /^https?$/ })
+          .optional()
+          .describe("HTTP(S) PM task URL to reference as Closes in the PR description."),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
+  async ({ path, branch, closes }) => zapdev(path, [
+    "pr", "--yes",
+    ...(closes ? [`--closes=${closes}`] : []),
+  ], branch),
 );
 
 await server.connect(new StdioServerTransport());

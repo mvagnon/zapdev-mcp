@@ -7,13 +7,13 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-test("commit validates inputs and invokes zapdev non-interactively without pushing", async () => {
+test("commit and pr validate inputs and invoke zapdev through npx without prompts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test-"));
   const client = new Client({ name: "commit-test", version: "1.0.0" });
   try {
     execFileSync("git", ["init", "--quiet", directory]);
     writeFileSync(
-      join(directory, "zapdev"),
+      join(directory, "npx"),
       `#!${process.execPath}
 if (process.argv.includes("--branch=fail")) {
   console.error("commit failed");
@@ -39,8 +39,9 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "commit", "--yes", "--pull", "--no-push", "--branch=feat/example",
+          "--yes", "zapdev", "commit", "--yes", "--pull", "--no-push",
           ...(type === "fix!" ? ["--type=fix!"] : []),
+          "--branch=feat/example",
         ],
         cwd: realpathSync(directory),
       });
@@ -55,6 +56,47 @@ console.error("scan warning");
       const result = await client.callTool({
         name: "commit",
         arguments: { path: directory, branch: "feat/example", ...input },
+      });
+      assert.equal(result.isError, true);
+      if (input.branch === "fail") {
+        assert.match(JSON.stringify(result.content), /commit failed/);
+      }
+    }
+
+    for (const input of [
+      {},
+      { branch: "develop" },
+      { closes: "https://trello.com/c/abc/task" },
+      { branch: "develop", closes: "https://github.com/owner/repo/issues/123" },
+    ]) {
+      const result = await client.callTool({
+        name: "pr",
+        arguments: { path: directory, ...input },
+      });
+      assert.notEqual(result.isError, true);
+      const output = result.structuredContent as { stdout: string; stderr: string };
+      assert.deepEqual(JSON.parse(output.stdout), {
+        args: [
+          "--yes", "zapdev", "pr", "--yes",
+          ...(input.closes ? [`--closes=${input.closes}`] : []),
+          ...(input.branch ? [`--branch=${input.branch}`] : []),
+        ],
+        cwd: realpathSync(directory),
+      });
+      assert.equal(output.stderr, "scan warning");
+    }
+
+    for (const input of [
+      { branch: "bad..branch" },
+      { branch: "" },
+      { closes: "not-a-url" },
+      { closes: "file:///etc/passwd" },
+      { path: "relative/path" },
+      { branch: "fail" },
+    ]) {
+      const result = await client.callTool({
+        name: "pr",
+        arguments: { path: directory, ...input },
       });
       assert.equal(result.isError, true);
       if (input.branch === "fail") {
