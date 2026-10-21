@@ -88,7 +88,7 @@ The MCP client must make `git`, `npx`, and, for PRs, `gh` available on the serve
 
 ### Development Setup
 
-From a clone:
+From a clone, using Node.js 22 as in CI:
 
 ```bash
 npm ci
@@ -97,8 +97,11 @@ npm ci
 | Command              | Description                                          |
 | -------------------- | ---------------------------------------------------- |
 | `npm start`          | Run the source server with tsx over stdio            |
+| `npm run lint`       | Lint TypeScript, JavaScript, JSON, and Markdown      |
 | `npm run typecheck`  | Check TypeScript types                               |
+| `npm run knip`       | Check unused files, exports, and dependencies        |
 | `npm test`           | Run the existing Node.js tests                       |
+| `npm run staticchecks` | Run lint, typecheck, Knip, and tests, as in CI       |
 | `npm run build`      | Compile the executable to `dist/`                    |
 | `npm pack --dry-run` | Build and inspect the npm package without publishing |
 

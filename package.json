@@ -22,8 +22,11 @@
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc --noEmit false --outDir dist",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "knip": "knip",
     "test": "node --import tsx --test index.test.ts",
+    "staticchecks": "npm run lint && npm run typecheck && npm run knip && npm run test",
     "prepack": "npm run build"
   },
   "dependencies": {
@@ -32,7 +35,13 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@eslint/json": "2.0.0",
+    "@eslint/markdown": "8.0.2",
     "@types/node": "22.20.5",
-    "typescript": "7.0.2"
+    "eslint": "10.6.0",
+    "knip": "6.41.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.62.1"
   }
 }
