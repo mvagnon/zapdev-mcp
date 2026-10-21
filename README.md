@@ -41,8 +41,10 @@ flowchart LR
 | `ZD_EFFORT`       | For `commit` / `pr` | Reasoning effort supported by your model, such as `low`, `medium`, or `high` |
 | `ZD_API_KEY`      | No                  | Bearer API key; omit for endpoints without authentication                    |
 | `ZD_HOOK_TIMEOUT` | No                  | Deadline per Git hook in seconds; zapdev defaults to `60`                    |
+| `ZD_REPOS_DIR`    | No                  | Absolute checkout root directory; defaults to `~/.zapdev/repos`              |
 
-These variables are inherited by zapdev. The model must support reasoning effort
+The `ZD_REPOS_DIR` variable configures this server; the others configure zapdev.
+The model must support reasoning effort
 and strict JSON Schema Structured Outputs; OpenAI compatibility or JSON mode alone
 is not sufficient. See [zapdev model configuration](https://github.com/mvagnon/zapdev#model-configuration)
 for local and OpenRouter examples.
@@ -113,6 +115,10 @@ To use a local build, run `npm run build`, then configure your MCP client with
 ### `get_repo`
 
 Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>/<repo>`.
+
+Set `ZD_REPOS_DIR` to an absolute path to override the root directory. For example,
+`ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner/repo`.
+An unset or empty value uses the default. Use a full path, not a literal `~`.
 
 | Argument | Required | Description                                                         |
 | -------- | -------- | ------------------------------------------------------------------- |

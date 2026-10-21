@@ -84,7 +84,8 @@ server.registerTool(
   "get_repo",
   {
     description:
-      "Clone or refresh a GitHub repository in ~/.zapdev/repos/<owner>/<repo>. " +
+      "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>/<repo> " +
+      "(defaults to ~/.zapdev/repos/<owner>/<repo>). " +
       "Returns its absolute path and root AGENTS.md contents when present. " +
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
@@ -113,10 +114,16 @@ server.registerTool(
       if (branch) await git(home, "check-ref-format", "--branch", branch);
       const owner = repo.slice(0, repo.indexOf("/"));
       const name = repo.slice(repo.indexOf("/") + 1);
-      const root = join(home, ".zapdev", "repos");
+      const root = process.env.ZD_REPOS_DIR || join(home, ".zapdev", "repos");
+      if (!isAbsolute(root)) {
+        throw new Error("ZD_REPOS_DIR must be an absolute path.");
+      }
       const parent = join(root, owner);
       const path = join(parent, name);
-      for (const directory of [join(home, ".zapdev"), root, parent]) {
+      const directories = process.env.ZD_REPOS_DIR
+        ? [root, parent]
+        : [join(home, ".zapdev"), root, parent];
+      for (const directory of directories) {
         ensureDirectory(directory);
       }
 
