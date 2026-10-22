@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/mvagnon/zapdev-mcp/compare/v2.0.0...v2.0.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **preparation:** Introduce preparation module and integrate selection-based repository/group preparation flow ([5b8a171](https://github.com/mvagnon/zapdev-mcp/commit/5b8a171d4997a95bb977ce5dd6238df3d0ae9f96))
+
 ## [2.0.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.6.0...v2.0.0) (2026-10-22)
 
 
