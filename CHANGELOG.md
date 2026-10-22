@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/mvagnon/zapdev-mcp/compare/v2.1.0...v2.1.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **server_logs:** Use scoped journal logs for server diagnostics and simplify stop/start flow. ([621dc2a](https://github.com/mvagnon/zapdev-mcp/commit/621dc2a764835073c9f6421f7a97388808def699))
+
 ## [2.1.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.0.1...v2.1.0) (2026-10-22)
 
 
