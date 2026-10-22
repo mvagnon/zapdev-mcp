@@ -1,6 +1,6 @@
 {
   "name": "zapdev-mcp",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "MCP server for zapdev repository, commit and pull request tools.",
   "type": "module",
   "bin": {
