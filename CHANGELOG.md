@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.4.0...v1.5.0) (2026-10-22)
+
+
+### Features
+
+* **config:** Run optional prepareCommand after linking secrets, preferring group config, with 180s timeout. ([5adf5bd](https://github.com/mvagnon/zapdev-mcp/commit/5adf5bd32d6009a188a06dcca8f3d49719a9be1e))
+
 ## [1.4.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.3.0...v1.4.0) (2026-10-22)
 
 
