@@ -33,6 +33,7 @@ flowchart LR
 
 - `index.ts`: MCP server, input validation, repository management, and CLI calls.
 - `repositories.ts`: shared repository paths and input validation.
+- `config.ts`: shared repository and group configuration.
 - `servers.ts`: server configuration, lifecycle commands, and startup context.
 - `index.test.ts`: repository, server lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
@@ -139,6 +140,13 @@ Returns only the absolute checkout `path`. Use `start_server` to retrieve
 `AGENTS.md` instructions and configured URLs. This replaces `get_repo`;
 clients using the old tool name must switch to `prepare_repo`.
 
+After Git preparation and secret linking, runs the optional `prepareCommand` from
+`zapdev.json`. The group's command takes priority and runs in the group directory;
+otherwise the repository's command runs in its checkout. Waits for completion
+(up to 180 seconds) before returning `path`. Command output is not included in
+successful responses; command failures return an MCP error. Completed Git changes
+and secret links are not rolled back. Without a command, nothing extra runs.
+
 After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secrets`:
 
 | Source under `~/.zapdev/secrets/` | Destination under `ZD_REPOS_DIR` |
@@ -163,7 +171,7 @@ branch, overwrites tracked changes, and removes untracked files and directories
 except ignored files. Never use this tool for a checkout containing work you
 want to keep. Git authentication must work without interactive prompts.
 
-### Server configuration: `zapdev.json`
+### Repository configuration: `zapdev.json`
 
 Store configuration under `~/.zapdev/config`, following the same group/repository
 layout as secrets. These files are read directly, not copied or symlinked into
@@ -179,6 +187,7 @@ Copy this template to the applicable location and adapt the commands and URLs:
 
 ```json
 {
+  "prepareCommand": "docker compose pull",
   "startCommand": "docker compose up",
   "stopCommand": "docker compose down",
   "frontUrl": "http://localhost:3000",
@@ -187,7 +196,7 @@ Copy this template to the applicable location and adapt the commands and URLs:
 }
 ```
 
-All five fields are optional; `{}` is valid. Missing files are treated as empty
+All six fields are optional; `{}` is valid. Missing files are treated as empty
 configuration. Omitted commands do not run; omitted URLs are absent from context.
 Commands must be nonempty strings; URLs must be valid absolute URLs, including
 database schemes. Malformed files and source symlinks are rejected. Unknown fields
@@ -201,6 +210,10 @@ stop commands must handle their shutdown.
 
 The parent takes priority **per field**:
 
+- A group's `prepareCommand` replaces the selected child's prepare command and
+  runs in the group directory, **once per `prepare_repo` call**, after that
+  repository's Git preparation and secret linking. Other children might not yet
+  be prepared. Without a parent command, the child's command runs in its checkout.
 - A group's `startCommand` runs **once**, replacing all selected child start
   commands. Without it, each selected child's start command runs in its checkout.
 - A group's `stopCommand` replaces the selected child's stop command and runs

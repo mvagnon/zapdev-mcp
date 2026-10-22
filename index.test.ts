@@ -93,6 +93,54 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       }
     }
 
+    const config = join(directory, ".zapdev", "config");
+    const standaloneConfig = join(config, "owner-repo", "zapdev.json");
+    const parentConfig = join(config, "my-group", "zapdev.json");
+    const childConfig = join(config, "my-group", "owner-repo", "zapdev.json");
+    mkdirSync(join(config, "owner-repo"), { recursive: true });
+    mkdirSync(join(config, "my-group", "owner-repo"), { recursive: true });
+    writeFileSync(standaloneConfig, JSON.stringify({
+      prepareCommand: "test -L .env.local && test -f AGENTS.md && printf standalone > prepared",
+    }));
+    writeFileSync(parentConfig, JSON.stringify({
+      prepareCommand: "test -L owner-repo/.env && test -f owner-repo/AGENTS.md && printf parent > prepared",
+    }));
+    writeFileSync(childConfig, JSON.stringify({
+      prepareCommand: "test -L .env && printf child > prepared",
+    }));
+    for (const group of [undefined, "my-group"]) {
+      const parent = join(root, ...(group ? [group] : []));
+      const path = join(parent, "owner-repo");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await client.callTool({
+          name: "prepare_repo", arguments: { repo: "owner/repo", ...(group && { group }) },
+        });
+        assert.notEqual(result.isError, true, JSON.stringify(result.content));
+        assert.deepEqual(result.structuredContent, { path });
+        assert.equal(readFileSync(join(group ? parent : path, "prepared"), "utf8"), group ? "parent" : "standalone");
+        if (group) assert.equal(existsSync(join(path, "prepared")), false);
+      }
+    }
+
+    writeFileSync(parentConfig, '{"frontUrl":"http://localhost:3000"}');
+    const fallback = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+    });
+    assert.notEqual(fallback.isError, true, JSON.stringify(fallback.content));
+    assert.equal(readFileSync(join(root, "my-group", "owner-repo", "prepared"), "utf8"), "child");
+
+    writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf 'prepare failed' >&2; exit 1" }));
+    const failedPreparation = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+    });
+    assert.equal(failedPreparation.isError, true);
+    assert.match(JSON.stringify(failedPreparation.content), /prepare failed/);
+    writeFileSync(childConfig, "{}");
+    const recovered = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+    });
+    assert.notEqual(recovered.isError, true, JSON.stringify(recovered.content));
+
     const groupConfig = join(root, "my-group", "config.json");
     const outside = join(directory, "outside.json");
     writeFileSync(outside, "untouched");

@@ -1,22 +1,14 @@
 import { execFile, spawn } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { readConfig, type Config } from "./config.js";
 import { groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
 
 const exec = promisify(execFile);
-const configSchema = z.object({
-  startCommand: z.string().trim().min(1).optional(),
-  stopCommand: z.string().trim().min(1).optional(),
-  frontUrl: z.url().optional(),
-  apiUrl: z.url().optional(),
-  dbUrl: z.url().optional(),
-});
-type Config = z.infer<typeof configSchema>;
 type Selection = { repo?: string; group?: string };
 type Context = {
   path: string;
@@ -37,25 +29,6 @@ function requireRepository(path: string): void {
   requireDirectory(path);
   if (!lstatSync(join(path, ".git"), { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`Expected a prepared Git checkout: ${path}`);
-  }
-}
-
-function readConfig(root: string, path: string): Config {
-  let directory = homedir();
-  for (const part of [".zapdev", "config", ...relative(root, path).split(sep)]) {
-    directory = join(directory, part);
-    const entry = lstatSync(directory, { throwIfNoEntry: false });
-    if (!entry) return {};
-    requireDirectory(directory);
-  }
-  const file = join(directory, "zapdev.json");
-  const entry = lstatSync(file, { throwIfNoEntry: false });
-  if (!entry) return {};
-  if (!entry.isFile()) throw new Error(`Expected a regular config file, not a symlink: ${file}`);
-  try {
-    return configSchema.parse(JSON.parse(readFileSync(file, "utf8")));
-  } catch {
-    throw new Error(`Invalid configuration in ${file}: expected JSON with optional nonempty commands and valid URLs.`);
   }
 }
 

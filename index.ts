@@ -19,6 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { readConfig } from "./config.js";
 import { ensureDirectory, groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
 import { registerServerTools } from "./servers.js";
 
@@ -122,6 +123,9 @@ server.registerTool(
       "Links matching files from ~/.zapdev/secrets into the group root and repository after refresh. " +
       "Secret symlinks replace matching files; keep them Git-ignored to avoid committing them. " +
       "Edits through these links modify the source secrets. " +
+      "After linking secrets, runs the optional prepareCommand from ~/.zapdev/config and waits up to 180 seconds. " +
+      "The group's command takes priority and runs once per prepare_repo call in the group directory; " +
+      "otherwise the repository command runs in its checkout. Missing commands do nothing; failures return an error. " +
       "Returns only its absolute path; use start_server for AGENTS.md instructions and configured URLs. " +
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
@@ -250,6 +254,14 @@ server.registerTool(
           const secretsParent = group === undefined ? secrets : join(secrets, group);
           if (group !== undefined) linkSecrets(secretsParent, parent, false);
           linkSecrets(join(secretsParent, checkoutName), path, true);
+        }
+        const parentCommand = group === undefined ? undefined : readConfig(root, parent).prepareCommand;
+        const command = parentCommand ?? readConfig(root, path).prepareCommand;
+        if (command !== undefined) {
+          await exec("/bin/sh", ["-c", command], {
+            cwd: parentCommand === undefined ? path : parent,
+            timeout: 180_000,
+          });
         }
         return {
           content: [{ type: "text", text: JSON.stringify(output) }],
