@@ -1,13 +1,13 @@
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { readConfig, serviceNameSchema, type Config } from "./config.js";
-import { groupSchema, repoSchema, repositoryPaths, repositoryRoot, requireDirectory } from "./repositories.js";
+import { repositoryPaths, repositoryRoot, requireDirectory } from "./repositories.js";
 import { runService, type Service, type ServiceResult } from "./service-manager.js";
 
-type Selection = { repo?: string; group?: string; service?: string };
+type Selection = { path?: string; service?: string };
 type Context = {
   path: string;
   agents_md?: string;
@@ -35,29 +35,45 @@ function context(path: string, config: Config): Context {
   return output;
 }
 
-function selection({ repo, group }: Selection): {
-  root: string; parent: string; path: string; parentConfig: Config;
+function selection({ path: requested }: Selection): {
+  root: string; parent: string; path: string; parentConfig: Config; isRepository: boolean;
 } {
-  if (!repo && !group) throw new Error("Supply a repo or a group.");
   const root = repositoryRoot();
   requireDirectory(root);
-  const parent = group === undefined ? root : join(root, group);
-  requireDirectory(parent);
-  const path = repo ? join(parent, repo.replace("/", "-")) : parent;
-  if (repo) requireRepository(path);
-  const parentConfig = group === undefined ? {} : readConfig(root, parent);
-  return { root, parent, path, parentConfig };
+  let path = resolve(requested ?? process.cwd());
+  const relativePath = relative(root, path);
+  const parts = relativePath.split(sep).filter(Boolean);
+  if (isAbsolute(relativePath) || parts.includes("..")) {
+    throw new Error(`Service path must be inside ZD_REPOS_DIR (${root}); supply an absolute path to a prepared checkout or group. The default is the MCP server's working directory.`);
+  }
+  let directory = root;
+  for (const part of parts) {
+    directory = join(directory, part);
+    requireDirectory(directory);
+  }
+  let isRepository = false;
+  for (let ancestor = path; ancestor !== root; ancestor = dirname(ancestor)) {
+    if (lstatSync(join(ancestor, ".git"), { throwIfNoEntry: false })) {
+      path = ancestor;
+      isRepository = true;
+      break;
+    }
+  }
+  if (isRepository) requireRepository(path);
+  const parent = isRepository ? dirname(path) : path;
+  const parentConfig = isRepository && parent === root ? {} : readConfig(root, parent);
+  return { root, parent, path, parentConfig, isRepository };
 }
 
 function selected(input: Selection): { context: Record<string, unknown>; services: Service[] } {
-  const { root, parent, path, parentConfig } = selection(input);
-  const paths = input.repo ? [path] : repositoryPaths(parent);
+  const { root, parent, path, parentConfig, isRepository } = selection(input);
+  const paths = isRepository ? [path] : repositoryPaths(path);
   const repositories = paths.map(path => {
     const config = readConfig(root, path);
     return { context: context(path, { ...config, ...parentConfig }), config };
   });
   const services = [
-    ...(!input.repo ? Object.entries(parentConfig.services ?? {}).map(([name, config]) => ({ name, path: parent, ...config })) : []),
+    ...(!isRepository ? Object.entries(parentConfig.services ?? {}).map(([name, config]) => ({ name, path, ...config })) : []),
     ...repositories.flatMap(({ context, config }) =>
       Object.entries(config.services ?? {}).map(([name, config]) => ({ name, path: context.path, ...config }))),
   ];
@@ -65,9 +81,9 @@ function selected(input: Selection): { context: Record<string, unknown>; service
   if (input.service !== undefined && filtered.length === 0) throw new Error(`Unknown service: ${input.service}`);
   return {
     context: {
-      ...(input.repo ? repositories[0]?.context : context(parent, parentConfig)),
-      ...(input.repo && input.group !== undefined && { parent: context(parent, parentConfig) }),
-      ...(!input.repo && { repositories: repositories.map(({ context }) => context) }),
+      ...(isRepository ? repositories[0]?.context : context(path, parentConfig)),
+      ...(isRepository && parent !== root && { parent: context(parent, parentConfig) }),
+      ...(!isRepository && { repositories: repositories.map(({ context }) => context) }),
     },
     services: filtered,
   };
@@ -87,7 +103,9 @@ async function result(action: () => Promise<Record<string, unknown> & { services
 }
 
 const selectionSchema = z.object({
-  repo: repoSchema.optional(), group: groupSchema,
+  path: z.string().optional().transform(value => value === "" ? undefined : value)
+    .refine(value => value === undefined || isAbsolute(value), "Expected an absolute checkout or group path.")
+    .describe("Optional absolute path inside ZD_REPOS_DIR. Defaults to the MCP server's working directory, not the client's active folder; empty means omitted. A path inside a checkout selects that repo; a group directory selects its services and all immediate child checkouts."),
   service: serviceNameSchema.optional().describe("Optional configured service name; otherwise selects all services."),
 }).strict();
 
@@ -98,10 +116,9 @@ export function registerServerTools(server: McpServer): void {
     {
       description:
         "Start an already prepared repository or group without running Git operations. " +
-        "Supply repo, group, or both to select a repository within a group. " +
+        "Supply optional path, otherwise uses the MCP server's working directory (not the client's active folder). Empty path means omitted. " +
+        "Paths must be inside ZD_REPOS_DIR; a path inside a checkout selects that repo, a group directory selects the group and all immediate child checkouts. " +
         "Requires Linux and a running systemd user manager. Reads named services from ~/.zapdev/config. " +
-        "With repo, selects only that checkout's services, at the root unless group is supplied. " +
-        "With group alone, selects the group's services and all immediate child checkouts' services. " +
         "Each service gets an independent systemd user unit and persistent logs; no PIDs to manage. " +
         "Already active services are reused; failed services return errors until stopped. " +
         "Observes new services for up to one second to detect immediate failures, including their latest logs on errors. " +
@@ -124,7 +141,7 @@ export function registerServerTools(server: McpServer): void {
   server.registerTool("stop_server", {
     description:
       "Stop named services in a prepared repository or group using systemd --user. " +
-      "Uses the same repository/group scope and optional service filter as start_server. " +
+      "Uses the same optional path/server cwd and service filter as start_server. " +
       "First sends SIGINT (Ctrl-C) to all processes in the unit, waiting up to 30 seconds before SIGKILL. " +
       "Then runs the optional stopCommand as cleanup, with its own 30-second systemd timeout. " +
       "Already stopped services are unchanged. Returns final states, errors and bounded final logs. " +
@@ -141,7 +158,7 @@ export function registerServerTools(server: McpServer): void {
   server.registerTool("server_logs", {
     description:
       "Read stdout/stderr and systemd diagnostics from the user journal for named services in a prepared repository or group. " +
-      "Uses the same repository/group scope and optional service filter as start_server. " +
+      "Uses the same optional path/server cwd and service filter as start_server. " +
       "Returns current systemd states, exit codes and the last lines (default 100, maximum 1000), capped at 64 KiB per service, without streaming. " +
       "ANSI control sequences are removed; truncated indicates omitted older content. " +
       "Requires journalctl and readable user journals; access errors are reported, not hidden as empty logs. " +

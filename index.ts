@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { prepareSelection } from "./preparation.js";
-import { git, groupSchema, repoSchema } from "./repositories.js";
+import { git, repositorySelectionSchema } from "./repositories.js";
 import { registerServerTools } from "./servers.js";
 
 const exec = promisify(execFile);
@@ -61,6 +61,7 @@ server.registerTool(
       "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>-<repo> " +
       "(defaults to ~/.zapdev/repos/<owner>-<repo>). " +
       "When group is supplied, place the checkout in <ZD_REPOS_DIR>/<group>/<owner>-<repo>. " +
+      "repo and group are individually optional; omitted or empty strings are ignored, but at least one must be nonempty. " +
       "Supply group alone to refresh all existing immediate child checkouts, without cloning new repositories. " +
       "With repo, links matching files from ~/.zapdev/secrets and runs prepareCommand only for that checkout, never for its group. " +
       "With group alone, prepares each child, then links group-root secrets and runs the group's prepareCommand once. " +
@@ -72,10 +73,8 @@ server.registerTool(
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
       "Never use for repositories containing work you want to keep.",
-    inputSchema: z
-      .object({
-        repo: repoSchema.optional(),
-        group: groupSchema,
+    inputSchema: repositorySelectionSchema
+      .extend({
         branch: z
           .string()
           .optional()

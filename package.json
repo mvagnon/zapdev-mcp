@@ -21,6 +21,7 @@
   },
   "scripts": {
     "start": "tsx index.ts",
+    "inspect": "npx --yes @modelcontextprotocol/inspector node --import tsx index.ts",
     "build": "tsc --noEmit false --outDir dist",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

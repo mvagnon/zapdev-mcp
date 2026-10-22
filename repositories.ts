@@ -25,13 +25,22 @@ export const repoSchema = z
   .refine((value) => !["", ".", ".."].includes(value.slice(value.indexOf("/") + 1)))
   .describe("GitHub repository as owner/repo.");
 
-/** Optional checkout group, restricted to a single directory name. */
-export const groupSchema = z
-  .string()
-  .regex(/^[^/\\\0]+$/)
-  .refine((value) => ![".", ".."].includes(value))
-  .optional()
-  .describe("Optional group folder inside ZD_REPOS_DIR; a single directory name, not a path.");
+const optionalSelector = z.string().optional().transform(value => value === "" ? undefined : value);
+
+/** Optional repository/group selectors; empty strings are treated as omitted fields. */
+export const repositorySelectionSchema = z.object({
+  repo: optionalSelector.pipe(repoSchema.optional()).describe(
+    "Optional GitHub repository as owner/repo. Omit or leave empty to target the whole group. " +
+    "With group, selects only that checkout; without group, selects the root checkout. Supply a nonempty repo or group.",
+  ),
+  group: optionalSelector.pipe(
+    z.string().regex(/^[^/\\\0]+$/).refine(value => ![".", ".."].includes(value)).optional(),
+  ).describe(
+    "Optional group folder inside ZD_REPOS_DIR; a single name, not a path. " +
+    "Without repo, targets the group and all existing immediate child checkouts. " +
+    "Omit or leave empty for a root checkout. Supply a nonempty repo or group.",
+  ),
+}).strict();
 
 /** Resolve the configured absolute root for disposable checkouts. */
 export function repositoryRoot(): string {

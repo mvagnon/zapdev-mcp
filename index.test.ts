@@ -35,6 +35,15 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       },
     }));
 
+    const preparation = (await client.listTools()).tools.find(tool => tool.name === "prepare_repo")!;
+    for (const name of ["repo", "group"]) {
+      const schema = preparation.inputSchema.properties?.[name] as Record<string, unknown>;
+      assert.equal(schema.type, "string", `${name} must render as a plain text input`);
+      assert.equal(schema.anyOf, undefined);
+      assert.equal(schema.oneOf, undefined);
+      assert.equal(preparation.inputSchema.required?.includes(name) ?? false, false);
+    }
+
     for (const group of [undefined, "my-group", "other-group"]) {
       const expected = join(root, ...(group ? [group] : []), "owner-repo");
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -50,6 +59,12 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
         assert.equal(existsSync(join(root, ...(group ? [group] : []), "owner")), false);
       }
     }
+
+    const rootWithEmptyGroup = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "" },
+    });
+    assert.notEqual(rootWithEmptyGroup.isError, true, JSON.stringify(rootWithEmptyGroup.content));
+    assert.deepEqual(rootWithEmptyGroup.structuredContent, { path: join(root, "owner-repo") });
 
     const secrets = join(directory, ".zapdev", "secrets");
     const groupSecrets = join(secrets, "my-group");
@@ -147,7 +162,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     writeFileSync(join(root, "owner-repo", "AGENTS.md"), "Standalone must stay untouched");
     writeFileSync(join(root, "other-group", "owner-repo", "AGENTS.md"), "Other group must stay untouched");
     writeFileSync(join(groupPath, "owner-repo", "AGENTS.md"), "Discard grouped changes");
-    const preparedGroup = await client.callTool({ name: "prepare_repo", arguments: { group: "my-group" } });
+    const preparedGroup = await client.callTool({ name: "prepare_repo", arguments: { repo: "", group: "my-group" } });
     assert.notEqual(preparedGroup.isError, true, JSON.stringify(preparedGroup.content));
     assert.deepEqual(preparedGroup.structuredContent, {
       path: groupPath,
@@ -161,6 +176,8 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     assert.equal(readFileSync(join(root, "owner-repo", "AGENTS.md"), "utf8"), "Standalone must stay untouched");
     assert.equal(readFileSync(join(root, "other-group", "owner-repo", "AGENTS.md"), "utf8"), "Other group must stay untouched");
     assert.equal((await client.callTool({ name: "prepare_repo", arguments: {} })).isError, true);
+    assert.equal((await client.callTool({ name: "prepare_repo", arguments: { repo: "", group: "" } })).isError, true);
+    assert.equal((await client.callTool({ name: "prepare_repo", arguments: { repo: "invalid", group: "my-group" } })).isError, true);
     assert.equal((await client.callTool({ name: "prepare_repo", arguments: { group: "missing" } })).isError, true);
     mkdirSync(join(root, "empty"));
     assert.deepEqual((await client.callTool({ name: "prepare_repo", arguments: { group: "empty" } })).structuredContent, {
@@ -199,7 +216,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     assert.equal(unsafeMetadata.isError, true);
     execFileSync("git", ["-C", join(root, "my-group", "owner-repo"), "rev-parse", "HEAD"]);
 
-    for (const group of ["", ".", "..", "../outside", "/absolute", "nested/group", "nested\\group", "bad\0name"]) {
+    for (const group of [".", "..", "../outside", "/absolute", "nested/group", "nested\\group", "bad\0name"]) {
       const result = await client.callTool({
         name: "prepare_repo",
         arguments: { repo: "owner/repo", group },

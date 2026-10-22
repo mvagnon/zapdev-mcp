@@ -123,6 +123,10 @@ moved or deleted.
 | `group`  | Unless `repo` is supplied | Single group name; alone, refreshes all existing immediate child checkouts |
 | `branch` | No       | Remote branch for each selected repo; defaults to each remote's default branch |
 
+`repo` and `group` are individually optional, but at least one must be nonempty.
+Empty strings are treated as omitted fields: `{"group":"my-group","repo":""}`
+is equivalent to `{"group":"my-group"}`. Other invalid values are still rejected.
+
 With `repo`, returns only the absolute checkout `path`. With `group` alone,
 returns the group's `path` and `repositories: [{ path }]`. Only existing immediate
 Git checkouts are refreshed; other directories, hidden directories, and symlinks
@@ -229,15 +233,16 @@ Replace them with `services`. Startup responses now contain `services`, not
 
 Commands and services are scoped to the selection; context keeps parent priority:
 
-- `repo` alone targets only `<ZD_REPOS_DIR>/<owner>-<repo>`; it never searches groups.
-- `group + repo` targets only that checkout's Git operations, secrets, prepare command,
-  and services. Group commands and services never replace or augment its own.
-- `group` alone includes the group's commands/services and all immediate child
-  checkouts' commands/services. A group with `services: {}` does not disable children.
+- Service tools use an optional absolute `path`, defaulting to the MCP server's
+  working directory. A checkout path selects only that repo; a group path includes
+  the group's services and all immediate child checkouts' services.
+- A group with `services: {}` does not disable child checkout services.
   The service-name filter applies across all selected paths, including duplicate names.
-- **Behavior change:** callers relying on a single repository to manage shared group
-  services or run the group's prepare command must now call with `group` alone.
-  Service IDs remain unchanged; existing units remain selectable by their original paths.
+- `prepare_repo` uses `repo`/`group`: `repo` alone selects a root checkout, both
+  select one grouped checkout, and `group` alone refreshes all immediate child
+  checkouts before running the group's prepare command once.
+- Selecting a single checkout never runs group commands or services. Group commands
+  and services never replace child commands or services.
 - Each parent URL overrides the corresponding child URL. Other child URLs remain
   available. Grouped repositories do not inherit standalone configuration.
 - Group `AGENTS.md` instructions take priority over repository instructions;
@@ -249,14 +254,26 @@ Start a prepared repository or group and return its context. Does not clone,
 fetch, pull, switch branches, or reset repositories; call `prepare_repo` first
 for the repository or whole group.
 
-| Argument | Required                   | Description                                                      |
-| -------- | -------------------------- | ---------------------------------------------------------------- |
-| `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
-| `group`  | Unless `repo` is supplied  | Alone: group services plus all child services; with `repo`: only that checkout |
-| `service` | No                       | Configured service name; otherwise selects all services          |
+| Argument | Required | Description |
+| -------- | -------- | ----------- |
+| `path` | No | Absolute path inside a prepared checkout, a group directory, or `ZD_REPOS_DIR` itself; defaults to the server's working directory |
+| `service` | No | Configured service name; otherwise selects all services |
 
-Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
-`{"repo":"owner/repo","group":"my-group"}`.
+Examples: `{}` uses the server's current directory;
+`{"path":"/srv/repos/my-group/owner-repo"}` selects one checkout;
+`{"path":"/srv/repos/my-group"}` selects the whole group (assuming
+`ZD_REPOS_DIR=/srv/repos`). A subdirectory inside a checkout resolves to its root.
+Selecting `ZD_REPOS_DIR` itself includes its own services and immediate child
+checkouts, not nested groups.
+
+**The default is the server process's working directory, not the active folder in
+your MCP client.** Explicit paths and the default cwd must remain inside
+`ZD_REPOS_DIR`; outside paths and symlinked directories are rejected.
+When running `npm run inspect` from this source repository, supply `path`
+explicitly unless the server's working directory is already in your prepared tree.
+
+Omitted and empty `path` values both use the default cwd. `repo` and `group` are
+not accepted by service tools; those selectors belong to `prepare_repo` only.
 
 The `branch` argument is no longer accepted. Use `prepare_repo` to select an
 existing remote branch, or `commit` to switch to or create a local branch.
@@ -292,7 +309,7 @@ No automatic port discovery or health checks are performed.
 
 ### `stop_server`
 
-Accepts the same `repo`, `group`, and optional `service` as `start_server`.
+Accepts the same optional `path` (default server cwd) and `service` as `start_server`.
 First sends SIGINT (the signal used by Ctrl-C) to all processes in the unit and
 waits up to 30 seconds for them to exit. Remaining processes are forcibly stopped
 with SIGKILL before the optional `stopCommand` runs as cleanup. Cleanup has its
@@ -307,7 +324,7 @@ that first stop still uses the old settings. Existing log files are not deleted.
 Returns each service's final state/result, errors, and last 100 log lines. A failed
 cleanup is reported even if the application has stopped. Makes no Git changes.
 
-Example: `{"group":"my-group","service":"backend"}`.
+Example: `{"path":"/srv/repos/my-group","service":"backend"}`.
 
 ### `server_logs`
 
@@ -320,7 +337,7 @@ and no journal entries are available. No old files are removed automatically.
 
 | Argument | Required | Description |
 | -------- | -------- | ----------- |
-| `repo` / `group` | At least one | Same repository/group scope as startup |
+| `path` | No | Same checkout/group scope as startup; defaults to the server cwd |
 | `service` | No | Select a configured name; otherwise returns every selected service |
 | `lines` | No | Last lines per service; defaults to 100, maximum 1000 |
 
@@ -332,7 +349,7 @@ An empty result means no entries were found; journal access errors are reported
 separately, even when `journalctl` exits successfully with a warning.
 Logs may contain application secrets; do not share them without review.
 
-Example: `{"repo":"owner/repo","service":"frontend","lines":50}`.
+Example: `{"path":"/srv/repos/my-group/owner-repo","service":"frontend","lines":50}`.
 
 ### `commit`
 
