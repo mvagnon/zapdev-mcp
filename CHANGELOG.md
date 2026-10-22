@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.2](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.1...v2.2.2) (2026-10-22)
+
+
+### Bug Fixes
+
+* **checkout-names:** switch checkout naming from owner$repo to owner__repo ([e555022](https://github.com/mvagnon/zapdev-mcp/commit/e5550225d038839e0940b3d1502154b89731fbbd))
+
 ## [2.2.1](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.0...v2.2.1) (2026-10-22)
 
 
