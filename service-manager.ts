@@ -64,7 +64,7 @@ function tailLogs(buffer: Buffer, lines: number, truncated = false): Logs {
 async function journalLogs(id: string, lines: number): Promise<Logs> {
   return new Promise(resolve => {
     const child = spawn("journalctl", [
-      `--user-unit=${id}`, "--quiet", "--no-pager", "--output=cat", `--lines=${lines + 1}`,
+      `--user-unit=${id}`, "--invocation=0", "--quiet", "--no-pager", "--output=short-iso-precise", `--lines=${lines + 1}`,
     ], { timeout: 15_000, killSignal: "SIGKILL", env: { ...process.env, LC_ALL: "C", SYSTEMD_COLORS: "0", SYSTEMD_URLIFY: "0" } });
     let buffer = Buffer.alloc(0);
     let truncated = false;

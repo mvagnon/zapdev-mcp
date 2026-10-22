@@ -110,7 +110,7 @@ export function registerServerTools(server: McpServer): void {
 
   server.registerTool("server_logs", {
     description:
-      "Read stdout/stderr and systemd diagnostics from accessible Linux journals, scoped to the current user's unit. " +
+      "Read timestamped stdout/stderr and systemd diagnostics for the latest invocation of the current user's unit (systemd 257+). " +
       "Returns current state, exit codes and logs (up to 64 KiB/service). Logs may contain secrets.",
     inputSchema: selectionSchema.extend({ lines: z.number().int().min(1).max(1000).default(100) }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },

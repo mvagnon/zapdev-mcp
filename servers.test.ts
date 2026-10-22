@@ -18,12 +18,14 @@ test("services return compact actions and scoped journal diagnostics", async () 
   const parentConfig = join(config, "zapdev.json");
   const stateFile = join(directory, "units.json");
   const clients: Client[] = [];
-  type Unit = { state: string; result: string; args: string[]; logs?: string; journalError?: string; journalWarning?: string; exitCode?: number };
+  type Unit = { state: string; result: string; args: string[]; logs?: string; previousLogs?: string; unloaded?: boolean; journalError?: string; journalWarning?: string; exitCode?: number };
   type Service = {
     id: string; name: string; path: string; state: string; exitCode?: number;
     error?: string; logs?: string; truncated?: boolean;
   };
   const units = (): Record<string, Unit> => JSON.parse(readFileSync(stateFile, "utf8"));
+  const timestamp = "2026-10-22T10:30:00.123456+0200";
+  const logLine = (message: string): string => `${timestamp} host service[123]: ${message}\n`;
   const connect = async (cwd?: string): Promise<Client> => {
     const client = new Client({ name: "server-test", version: "1.0.0" });
     clients.push(client);
@@ -52,12 +54,12 @@ if (unit?.exitAt && Date.now() >= unit.exitAt && unit.state === "active") {
   fs.writeFileSync(file, JSON.stringify(units));
 }
 if (args.includes("show")) {
-  console.log("LoadState=" + (unit ? "loaded" : "not-found"));
+  console.log("LoadState=" + (unit && !unit.unloaded ? "loaded" : "not-found"));
   console.log("ActiveState=" + (unit?.state ?? "inactive"));
   console.log("SubState=" + (unit?.state === "active" ? "running" : "dead"));
   console.log("Result=" + (unit?.result ?? "success"));
   console.log("ExecMainStatus=" + (unit?.exitCode ?? (unit?.result === "exit-code" ? 1 : 0)));
-  process.exit(unit ? 0 : 4);
+  process.exit(unit && !unit.unloaded ? 0 : 4);
 }
 if (args.includes("stop") && unit) {
   unit.result = unit.args.some(arg => arg.includes("fail-stop")) ? "exit-code" : "success";
@@ -90,9 +92,11 @@ const unit = units[id];
 if (unit?.journalError) { console.error(unit.journalError); process.exit(1); }
 if (unit?.journalWarning) console.error(unit.journalWarning);
 const limit = Number(args.find(arg => arg.startsWith("--lines="))?.slice(8));
-const entries = (unit?.logs ?? "").split("\\n");
+const previous = args.includes("--invocation=0") ? "" : (unit?.previousLogs ?? "");
+const entries = (previous + (unit?.logs ?? "")).split("\\n");
 if (entries.at(-1) === "") entries.pop();
-process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n" : ""));
+const prefix = args.includes("--output=short-iso-precise") ? "${timestamp} host service[123]: " : "";
+process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n") + (entries.length ? "\\n" : ""));
 `, { mode: 0o755 });
     for (const path of [first, second, standalone]) {
       execFileSync("git", ["init", "--quiet", path]);
@@ -185,13 +189,16 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.equal((await repositoryClient.callTool({ name: "stop_server", arguments: {} })).isError, undefined);
 
     const journal = units();
+    journal[service.id]!.previousLogs = "Previous invocation logs\n";
     journal[service.id]!.logs = "old\nfirst\nsecond\n";
     writeFileSync(stateFile, JSON.stringify(journal));
     const logs = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend", lines: 2 } });
     assert.notEqual(logs.isError, true, JSON.stringify(logs.content));
-    assert.equal((logs.structuredContent?.services as Service[])[0]?.logs, "first\nsecond\n");
+    assert.equal((logs.structuredContent?.services as Service[])[0]?.logs, logLine("first") + logLine("second"));
     assert.equal((logs.structuredContent?.services as Service[])[0]?.truncated, true);
     assert.equal((logs.structuredContent?.services as Service[])[0]?.state, "active");
+    const latest = await other.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
+    assert.equal((latest.structuredContent?.services as Service[])[0]?.logs, logLine("old") + logLine("first") + logLine("second"));
     journal[service.id]!.logs = "x".repeat(500_000);
     writeFileSync(stateFile, JSON.stringify(journal));
     const bounded = await client.callTool({ name: "server_logs", arguments: { path: group } });
@@ -202,7 +209,7 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     writeFileSync(stateFile, JSON.stringify(journal));
     const warning = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
     assert.notEqual(warning.isError, true, JSON.stringify(warning.content));
-    assert.equal((warning.structuredContent?.services as Service[])[0]?.logs, "Available service logs\n");
+    assert.equal((warning.structuredContent?.services as Service[])[0]?.logs, logLine("Available service logs"));
     delete journal[service.id]!.journalWarning;
     journal[service.id]!.journalError = "Permission denied reading journal";
     writeFileSync(stateFile, JSON.stringify(journal));
@@ -218,7 +225,13 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     writeFileSync(stateFile, JSON.stringify(journal));
     const stoppedLogs = await groupClient.callTool({ name: "server_logs", arguments: { service: "frontend" } });
     assert.equal((stoppedLogs.structuredContent?.services as Service[])[0]?.state, "inactive");
-    assert.equal((stoppedLogs.structuredContent?.services as Service[])[0]?.logs, "Stopped logs remain available\n");
+    assert.equal((stoppedLogs.structuredContent?.services as Service[])[0]?.logs, logLine("Stopped logs remain available"));
+    journal[service.id]!.unloaded = true;
+    writeFileSync(stateFile, JSON.stringify(journal));
+    const unloadedLogs = await other.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
+    assert.notEqual(unloadedLogs.isError, true, JSON.stringify(unloadedLogs.content));
+    assert.equal((unloadedLogs.structuredContent?.services as { exists: boolean }[])[0]?.exists, false);
+    assert.equal((unloadedLogs.structuredContent?.services as Service[])[0]?.logs, logLine("Stopped logs remain available"));
     assert.notEqual((await client.callTool({ name: "stop_server", arguments: { path: group } })).isError, true);
     assert.equal((await client.callTool({ name: "server_logs", arguments: { path: group } })).isError, undefined);
 
@@ -256,7 +269,7 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.equal(failedLogs.isError, true);
     assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.state, "failed");
     assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.exitCode, 1);
-    assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.logs, "Backend runtime failure\n");
+    assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.logs, logLine("Backend runtime failure"));
     const failedStop = await client.callTool({ name: "stop_server", arguments: { path: group, service: "cleanup" } });
     assert.equal(failedStop.isError, true);
     assert.equal((failedStop.structuredContent?.services as Service[])[0]?.state, "failed");

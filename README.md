@@ -63,7 +63,7 @@ See [zapdev model configuration](https://github.com/mvagnon/zapdev#model-configu
 - **Git:** clones repositories and performs Git operations.
 - **Linux with a running systemd user manager:** required for service supervision.
   Services run without sudo in independent units.
-- **`journalctl` and readable service journals:** required for `server_logs`.
+- **`journalctl` from systemd 257+ and readable service journals:** required for `server_logs`.
   Queries are scoped to the current user's unit and UID.
 - **GitHub authentication:** configure non-interactive Git credentials for private repositories.
   Install GitHub CLI and run `gh auth login` for `pr`.
@@ -321,6 +321,8 @@ Example: `{"path":"/srv/repos/my-group","service":"backend"}`.
 
 Reads stdout/stderr and systemd diagnostics directly from journald.
 Queries use `--user-unit` to filter by unit and UID.
+Only the latest invocation recorded in the journal is shown, using `--invocation=0`.
+Timestamps include the date, time, microseconds, and timezone offset.
 Logs can be stored in the system journal or a separate user journal.
 The MCP does not maintain log files.
 Retention and rotation follow the host's journal settings.
