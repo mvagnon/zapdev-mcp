@@ -1,14 +1,11 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify, stripVTControlCharacters } from "node:util";
 
 const exec = promisify(execFile);
 const logLimit = 65_536;
-type LogSource = "journal" | "file";
 
 /** One named service configured in its repository or group directory. */
 export type Service = { name: string; path: string; startCommand: string; stopCommand?: string };
@@ -16,10 +13,9 @@ export type Service = { name: string; path: string; startCommand: string; stopCo
 export type ServiceResult = {
   name: string; path: string; id: string; state?: string; subState?: string;
   result?: string; exitCode?: number; exists?: boolean; logs?: string; truncated?: boolean; error?: string;
-  logSource?: LogSource;
 };
-type Status = { state: string; subState: string; result: string; exitCode: number; exists: boolean; logSource: LogSource };
-type Logs = { logs: string; truncated: boolean; error?: string; logSource?: LogSource };
+type Status = { state: string; subState: string; result: string; exitCode: number; exists: boolean };
+type Logs = { logs: string; truncated: boolean; error?: string };
 
 async function systemd(command: string, args: string[], timeout = 15_000): Promise<string> {
   try {
@@ -38,7 +34,7 @@ async function systemd(command: string, args: string[], timeout = 15_000): Promi
 
 async function status(id: string): Promise<Status> {
   const output = await systemd("systemctl", [
-    "show", "--property=LoadState,ActiveState,SubState,Result,ExecMainStatus,StandardOutput", id,
+    "show", "--property=LoadState,ActiveState,SubState,Result,ExecMainStatus", id,
   ]);
   const fields = Object.fromEntries(output.trim().split("\n").map(line => {
     const index = line.indexOf("=");
@@ -49,7 +45,6 @@ async function status(id: string): Promise<Status> {
     state: fields.ActiveState, subState: fields.SubState ?? "dead",
     result: fields.Result || "success", exitCode: Number(fields.ExecMainStatus || 0),
     exists: fields.LoadState !== "not-found",
-    logSource: fields.StandardOutput === "append" ? "file" : "journal",
   };
 }
 
@@ -66,32 +61,10 @@ function tailLogs(buffer: Buffer, lines: number, truncated = false): Logs {
   };
 }
 
-// deprecated on 2026-10-22: journald stores new service logs; retain file reads for existing units and archived logs.
-function fileLogs(id: string, lines: number): Logs {
-  const directory = join(homedir(), ".zapdev", "services");
-  const parent = lstatSync(directory, { throwIfNoEntry: false });
-  if (parent && !parent.isDirectory()) throw new Error(`Expected a service log directory, not a symlink: ${directory}`);
-  const path = join(directory, `${id}.log`);
-  const entry = lstatSync(path, { throwIfNoEntry: false });
-  if (!entry) return { logs: "", truncated: false };
-  if (!entry.isFile()) throw new Error(`Expected a regular service log, not a symlink: ${path}`);
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    if (!fstatSync(fd).isFile()) throw new Error(`Expected a regular service log: ${path}`);
-    const size = fstatSync(fd).size;
-    const offset = Math.max(0, size - logLimit);
-    const buffer = Buffer.alloc(Math.min(size, logLimit));
-    const read = readSync(fd, buffer, 0, buffer.length, offset);
-    return tailLogs(buffer.subarray(0, read), lines, offset > 0);
-  } finally {
-    closeSync(fd);
-  }
-}
-
 async function journalLogs(id: string, lines: number): Promise<Logs> {
   return new Promise(resolve => {
     const child = spawn("journalctl", [
-      "--user", `--unit=${id}`, "--no-pager", "--output=cat", `--lines=${lines + 1}`,
+      `--user-unit=${id}`, "--quiet", "--no-pager", "--output=cat", `--lines=${lines + 1}`,
     ], { timeout: 15_000, killSignal: "SIGKILL", env: { ...process.env, LC_ALL: "C", SYSTEMD_COLORS: "0", SYSTEMD_URLIFY: "0" } });
     let buffer = Buffer.alloc(0);
     let truncated = false;
@@ -104,28 +77,11 @@ async function journalLogs(id: string, lines: number): Promise<Logs> {
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-16_384); });
     child.once("error", error => resolve({ logs: "", truncated: false, error: `Could not read service journal: ${error.message}` }));
     child.once("close", (code, signal) => {
-      const output = tailLogs(buffer.toString("utf8").trim() === "-- No entries --" ? Buffer.alloc(0) : buffer, lines, truncated);
-      const error = stderr.trim() || (code !== 0 ? `journalctl failed (${signal ?? code}).` : undefined);
+      const output = tailLogs(buffer, lines, truncated);
+      const error = code !== 0 ? stderr.trim() || `journalctl failed (${signal ?? code}).` : undefined;
       resolve({ ...output, ...(error && { error: `Could not read service journal: ${error}` }) });
     });
   });
-}
-
-async function serviceLogs(id: string, lines: number, current: ServiceResult): Promise<Logs> {
-  const journal = await journalLogs(id, lines);
-  let legacy: Logs = { logs: "", truncated: false };
-  try {
-    if (current.logSource === "file" || (current.exists !== true && !journal.logs)) legacy = fileLogs(id, lines);
-  } catch (error) {
-    legacy.error = error instanceof Error ? error.message : String(error);
-  }
-  const separator = legacy.logs && journal.logs && !legacy.logs.endsWith("\n") ? "\n" : "";
-  const error = [journal.error, legacy.error].filter(Boolean).join("\n");
-  return {
-    ...tailLogs(Buffer.from(legacy.logs + separator + journal.logs), lines, legacy.truncated || journal.truncated),
-    logSource: current.logSource === "file" || legacy.logs ? "file" : "journal",
-    ...(error && { error }),
-  };
 }
 
 async function start(service: Service, id: string, current: Status): Promise<Status> {
@@ -181,9 +137,9 @@ export async function runService(service: Service, action: "start" | "stop" | "l
     const current = await status(id).catch(() => undefined);
     if (current) Object.assign(output, current);
   }
-  if (action !== "start" || output.error !== undefined) {
+  if (action === "logs") {
     try {
-      const { error, ...logs } = await serviceLogs(id, lines, output);
+      const { error, ...logs } = await journalLogs(id, lines);
       Object.assign(output, logs);
       if (error) output.error = [output.error, error].filter(Boolean).join("\n");
     } catch (error) {

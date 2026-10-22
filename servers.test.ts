@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-test("named services preserve parent context and support start, stop, and bounded logs", async () => {
+test("services return compact actions and scoped journal diagnostics", async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-services-test-")));
   const root = join(directory, "repos");
   const group = join(root, "my-group");
@@ -18,10 +18,10 @@ test("named services preserve parent context and support start, stop, and bounde
   const parentConfig = join(config, "zapdev.json");
   const stateFile = join(directory, "units.json");
   const clients: Client[] = [];
-  type Unit = { state: string; result: string; args: string[]; logs?: string; journalError?: string; exitCode?: number };
+  type Unit = { state: string; result: string; args: string[]; logs?: string; journalError?: string; journalWarning?: string; exitCode?: number };
   type Service = {
     id: string; name: string; path: string; state: string; exitCode?: number;
-    error?: string; logs?: string; truncated?: boolean; logSource?: string;
+    error?: string; logs?: string; truncated?: boolean;
   };
   const units = (): Record<string, Unit> => JSON.parse(readFileSync(stateFile, "utf8"));
   const connect = async (cwd?: string): Promise<Client> => {
@@ -57,7 +57,6 @@ if (args.includes("show")) {
   console.log("SubState=" + (unit?.state === "active" ? "running" : "dead"));
   console.log("Result=" + (unit?.result ?? "success"));
   console.log("ExecMainStatus=" + (unit?.exitCode ?? (unit?.result === "exit-code" ? 1 : 0)));
-  console.log("StandardOutput=" + (unit?.args.find(arg => arg.startsWith("--property=StandardOutput="))?.slice(26).split(":")[0] ?? "journal"));
   process.exit(unit ? 0 : 4);
 }
 if (args.includes("stop") && unit) {
@@ -84,9 +83,12 @@ if (failed) { console.error("Start failed"); process.exit(1); }
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const units = JSON.parse(fs.readFileSync(process.env.TEST_UNITS, "utf8"));
-const id = args.find(arg => arg.startsWith("--unit="))?.slice(7);
+if (args.includes("--user")) { console.error("No journal files were found."); process.exit(0); }
+const id = args.find(arg => arg.startsWith("--user-unit="))?.slice(12);
+if (!id) throw new Error("Missing user-unit scope");
 const unit = units[id];
-if (unit?.journalError) { console.error(unit.journalError); process.exit(0); }
+if (unit?.journalError) { console.error(unit.journalError); process.exit(1); }
+if (unit?.journalWarning) console.error(unit.journalWarning);
 const limit = Number(args.find(arg => arg.startsWith("--lines="))?.slice(8));
 const entries = (unit?.logs ?? "").split("\\n");
 if (entries.at(-1) === "") entries.pop();
@@ -116,37 +118,23 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     }
     const client = await connect();
     const tools = await client.listTools();
-    for (const name of ["prepare_repo", "start_server", "stop_server", "server_logs"]) {
+    for (const name of ["start_server", "stop_server", "server_logs"]) {
       const tool = tools.tools.find(tool => tool.name === name)!;
       assert.equal(tool.inputSchema.required?.includes("path") ?? false, false, `${name}: path must be optional`);
-      if (name === "prepare_repo") {
-        assert.equal(tool.inputSchema.required?.includes("repo") ?? false, false, "prepare_repo: repo must be optional");
-        assert.equal(tool.inputSchema.required?.includes("group") ?? false, false, "prepare_repo: group must be optional");
-      } else {
-        assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(),
-          name === "server_logs" ? ["lines", "path", "service"] : ["path", "service"]);
-      }
+      assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(),
+        name === "server_logs" ? ["lines", "path", "service"] : ["path", "service"]);
     }
     const started = await client.callTool({ name: "start_server", arguments: { path: group } });
     assert.notEqual(started.isError, true, JSON.stringify(started.content));
-    const output = started.structuredContent as {
-      path: string; agents_md: string; frontUrl: string;
-      repositories: Array<{ path: string; agents_md: string; frontUrl: string; apiUrl: string }>;
-      services: Service[];
-    };
-    assert.equal(output.path, group);
-    assert.equal(output.agents_md, "Parent instructions");
-    assert.equal(output.frontUrl, "http://localhost:3000");
-    assert.deepEqual(output.repositories, [first, second].map(path => ({
-      path, agents_md: "Repository instructions", frontUrl: "http://localhost:3000", apiUrl: "http://localhost:4000",
-    })));
-    assert.ok(Array.isArray(output.services), "Expected named service results instead of PIDs");
-    assert.equal(output.services.length, 3);
-    assert.deepEqual(output.services.map(({ path }) => path), [group, first, second]);
+    assert.deepEqual(started.structuredContent, {
+      path: group,
+      services: [group, first, second].map((path, index) => ({ name: index === 0 ? "frontend" : "backend", path, state: "active" })),
+    });
+    const details = await client.callTool({ name: "server_logs", arguments: { path: group } });
+    assert.notEqual(details.isError, true, JSON.stringify(details.content));
+    const output = details.structuredContent as { path: string; services: Service[] };
+    assert.equal(new Set(output.services.map(({ id }) => id)).size, 3);
     const service = output.services[0]!;
-    assert.equal(service.name, "frontend");
-    assert.equal(service.path, group);
-    assert.equal(service.state, "active");
     const args = units()[service.id]!.args;
     assert.ok(args.includes("--user"));
     assert.ok(args.includes("--property=KillMode=control-group"));
@@ -158,9 +146,7 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.ok(!args.some(arg => arg.startsWith("--property=ExecStop=")));
     assert.ok(args.includes("--property=StandardOutput=journal"));
     assert.ok(args.includes("--property=StandardError=journal"));
-    assert.equal(service.logSource, "journal");
-    const logPath = join(directory, ".zapdev", "services", `${service.id}.log`);
-    assert.equal(existsSync(logPath), false);
+    assert.equal(existsSync(join(directory, ".zapdev", "services")), false);
 
     const other = await connect();
     const repeated = await other.callTool({ name: "start_server", arguments: { path: group } });
@@ -168,36 +154,24 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.deepEqual(units()[service.id]!.args, args);
     assert.equal(Object.keys(units()).length, 3);
     const groupClient = await connect(group);
-    for (const name of ["start_server", "server_logs"]) {
-      for (const input of [{}, { path: "" }, { path: group }]) {
-        const response = await groupClient.callTool({ name, arguments: input });
-        assert.notEqual(response.isError, true, JSON.stringify(response.content));
-        assert.equal(response.structuredContent?.path, group);
-        assert.deepEqual((response.structuredContent?.services as Service[]).map(({ path }) => path), [group, first, second]);
-      }
+    for (const input of [{}, { path: "" }]) {
+      const response = await groupClient.callTool({ name: "server_logs", arguments: input });
+      assert.notEqual(response.isError, true, JSON.stringify(response.content));
+      assert.deepEqual((response.structuredContent?.services as Service[]).map(({ path }) => path), [group, first, second]);
     }
-    const single = await client.callTool({
-      name: "start_server", arguments: { path: first },
-    });
-    assert.deepEqual(single.structuredContent?.parent, { path: group, agents_md: "Parent instructions", frontUrl: "http://localhost:3000" });
-    assert.deepEqual((single.structuredContent?.services as Service[]).map(({ path }) => path), [first]);
-    assert.equal((single.structuredContent?.services as Service[])[0]?.id, output.services[1]?.id);
     assert.equal((await client.callTool({
       name: "start_server", arguments: { path: first, service: "frontend" },
     })).isError, true);
-    for (const { input, expected } of [
-      { input: { path: first }, expected: first },
-      { input: { path: standalone }, expected: standalone },
-    ]) {
+    for (const expected of [first, standalone]) {
+      const input = { path: expected };
       const started = await client.callTool({ name: "start_server", arguments: input });
       const selected = started.structuredContent?.services as Service[];
       assert.equal(selected.length, 1);
       assert.equal(selected[0]?.path, expected);
-      assert.notEqual(selected[0]?.id, service.id);
       for (const name of ["server_logs", "stop_server"]) {
         const response = await client.callTool({ name, arguments: input });
         assert.notEqual(response.isError, true, JSON.stringify(response.content));
-        assert.deepEqual((response.structuredContent?.services as Service[]).map(({ id }) => id), [selected[0]?.id]);
+        assert.deepEqual((response.structuredContent?.services as Service[]).map(({ path }) => path), [expected]);
       }
       assert.equal(units()[service.id]?.state, "active");
       assert.equal(units()[output.services[2]!.id]?.state, "active");
@@ -223,30 +197,28 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     const bounded = await client.callTool({ name: "server_logs", arguments: { path: group } });
     assert.ok(Buffer.byteLength((bounded.structuredContent?.services as Service[])[0]!.logs!) <= 65_536);
     assert.equal((bounded.structuredContent?.services as Service[])[0]?.truncated, true);
+    journal[service.id]!.logs = "Available service logs\n";
+    journal[service.id]!.journalWarning = "Some archived journal files were ignored";
+    writeFileSync(stateFile, JSON.stringify(journal));
+    const warning = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
+    assert.notEqual(warning.isError, true, JSON.stringify(warning.content));
+    assert.equal((warning.structuredContent?.services as Service[])[0]?.logs, "Available service logs\n");
+    delete journal[service.id]!.journalWarning;
     journal[service.id]!.journalError = "Permission denied reading journal";
     writeFileSync(stateFile, JSON.stringify(journal));
     const denied = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
     assert.equal(denied.isError, true);
     assert.match((denied.structuredContent?.services as Service[])[0]?.error ?? "", /Permission denied/);
+    const stoppedWithoutJournal = await groupClient.callTool({ name: "stop_server", arguments: { service: "frontend" } });
+    assert.deepEqual(stoppedWithoutJournal.structuredContent, { path: group, services: [{ name: "frontend", path: group, state: "inactive" }] });
+    assert.notEqual(stoppedWithoutJournal.isError, true);
+    Object.assign(journal, units());
     delete journal[service.id]!.journalError;
-    journal[service.id]!.logs = "";
-    journal[service.id]!.args = args.map(arg => arg === "--property=StandardOutput=journal" ? `--property=StandardOutput=append:${logPath}` : arg);
+    journal[service.id]!.logs = "Stopped logs remain available\n";
     writeFileSync(stateFile, JSON.stringify(journal));
-    mkdirSync(join(directory, ".zapdev", "services"), { recursive: true });
-    writeFileSync(logPath, "Legacy logs remain available\n");
-    const legacy = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
-    assert.notEqual(legacy.isError, true, JSON.stringify(legacy.content));
-    assert.equal((legacy.structuredContent?.services as Service[])[0]?.logs, "Legacy logs remain available\n");
-    assert.equal((legacy.structuredContent?.services as Service[])[0]?.logSource, "file");
-    rmSync(logPath);
-    symlinkSync(join(group, "AGENTS.md"), logPath);
-    assert.equal((await client.callTool({ name: "server_logs", arguments: { path: group } })).isError, true);
-    rmSync(logPath);
-    writeFileSync(logPath, "Stopped logs remain available\n");
-    const stopped = await groupClient.callTool({ name: "stop_server", arguments: { service: "frontend" } });
-    assert.notEqual(stopped.isError, true, JSON.stringify(stopped.content));
-    assert.equal((stopped.structuredContent?.services as Service[])[0]?.state, "inactive");
-    assert.equal((stopped.structuredContent?.services as Service[])[0]?.logs, "Stopped logs remain available\n");
+    const stoppedLogs = await groupClient.callTool({ name: "server_logs", arguments: { service: "frontend" } });
+    assert.equal((stoppedLogs.structuredContent?.services as Service[])[0]?.state, "inactive");
+    assert.equal((stoppedLogs.structuredContent?.services as Service[])[0]?.logs, "Stopped logs remain available\n");
     assert.notEqual((await client.callTool({ name: "stop_server", arguments: { path: group } })).isError, true);
     assert.equal((await client.callTool({ name: "server_logs", arguments: { path: group } })).isError, undefined);
 
@@ -255,9 +227,6 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.notEqual(children.isError, true, JSON.stringify(children.content));
     const childServices = children.structuredContent?.services as Service[];
     assert.deepEqual(childServices.map(({ path }) => path), [first, second]);
-    assert.equal(new Set(childServices.map(({ id }) => id)).size, 2);
-    assert.ok(childServices.every(({ id }) => units()[id]!.args.includes("--property=KillSignal=SIGINT")));
-    assert.ok(childServices.every(({ id }) => !units()[id]!.args.some(arg => arg.startsWith("--property=ExecStop"))));
     writeFileSync(parentConfig, JSON.stringify({ services: {} }));
     const empty = await client.callTool({ name: "start_server", arguments: { path: group } });
     assert.deepEqual((empty.structuredContent?.services as Service[]).map(({ path }) => path), [first, second]);
@@ -272,13 +241,14 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.equal(partial.isError, true);
     const partialServices = partial.structuredContent?.services as Service[];
     assert.equal(partialServices.find(({ name }) => name === "good")?.state, "active");
-    assert.match(partialServices.find(({ name }) => name === "bad")?.error ?? "", /failed/i);
     assert.match(partialServices.find(({ name }) => name === "bad")?.error ?? "", /Start failed/);
-    assert.equal(partialServices.find(({ name }) => name === "bad")?.logs, "Backend startup failed\n");
     assert.equal(partialServices.find(({ name }) => name === "late")?.state, "failed");
-    assert.equal(partialServices.find(({ name }) => name === "late")?.exitCode, 127);
-    assert.match(partialServices.find(({ name }) => name === "late")?.logs ?? "", /expo: command not found/);
-    const running = partialServices.find(({ name }) => name === "good")!;
+    assert.ok(partialServices.every(service => Object.keys(service).every(key => ["name", "path", "state", "error"].includes(key))));
+    const late = await client.callTool({ name: "server_logs", arguments: { path: group, service: "late" } });
+    assert.equal((late.structuredContent?.services as Service[])[0]?.exitCode, 127);
+    assert.match((late.structuredContent?.services as Service[])[0]?.logs ?? "", /expo: command not found/);
+    const good = await client.callTool({ name: "server_logs", arguments: { path: group, service: "good" } });
+    const running = (good.structuredContent?.services as Service[])[0]!;
     const runtimeFailure = units();
     Object.assign(runtimeFailure[running.id]!, { state: "failed", result: "exit-code", exitCode: 1, logs: "Backend runtime failure\n" });
     writeFileSync(stateFile, JSON.stringify(runtimeFailure));
@@ -292,17 +262,14 @@ process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n"
     assert.equal((failedStop.structuredContent?.services as Service[])[0]?.state, "failed");
 
     for (const services of [[], { "../bad": { startCommand: "echo bad" } }, { api: { startCommand: " " } },
-      { api: { startCommand: "echo ok", stopCommand: " " } }, { api: { startCommand: ["echo legacy"] } }]) {
+      { api: { startCommand: "echo ok", stopCommand: " " } }]) {
       writeFileSync(parentConfig, JSON.stringify({ services }));
       assert.equal((await client.callTool({ name: "start_server", arguments: { path: group } })).isError, true);
     }
-    writeFileSync(parentConfig, JSON.stringify({ startCommand: ["echo legacy"] }));
-    assert.equal((await client.callTool({ name: "start_server", arguments: { path: group } })).isError, true);
     writeFileSync(parentConfig, "{}");
     for (const name of ["start_server", "stop_server", "server_logs"]) {
-      for (const input of [{}, { path: group, repo: "", group: "" }, { path: group, repo: "owner/first" },
-        { path: group, group: "my-group" }, { path: join(group, "owner-missing") }, { path: group, service: "missing" },
-        { path: group, branch: "main" }, { path: "relative" }, { path: directory }]) {
+      for (const input of [{ path: group, repo: "owner/first" }, { path: group, group: "my-group" },
+        { path: group, service: "missing" }, { path: "relative" }, { path: directory }]) {
         assert.equal((await client.callTool({ name, arguments: input })).isError, true);
       }
     }

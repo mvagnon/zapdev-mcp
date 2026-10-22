@@ -1,20 +1,15 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { readConfig, serviceNameSchema, type Config } from "./config.js";
+import { readConfig, serviceNameSchema } from "./config.js";
 import { repositoryPaths, repositoryRoot, requireDirectory } from "./repositories.js";
 import { runService, type Service, type ServiceResult } from "./service-manager.js";
 
 type Selection = { path?: string; service?: string };
-type Context = {
-  path: string;
-  agents_md?: string;
-  frontUrl?: string;
-  apiUrl?: string;
-  dbUrl?: string;
-};
+type ServiceSummary = Pick<ServiceResult, "name" | "path" | "state" | "error">;
+type ServiceOutput = { path: string; services: ServiceSummary[] };
 
 function requireRepository(path: string): void {
   requireDirectory(path);
@@ -23,20 +18,8 @@ function requireRepository(path: string): void {
   }
 }
 
-function context(path: string, config: Config): Context {
-  const output: Context = { path };
-  const instructions = join(path, "AGENTS.md");
-  if (lstatSync(instructions, { throwIfNoEntry: false })?.isFile()) {
-    output.agents_md = readFileSync(instructions, "utf8");
-  }
-  for (const key of ["frontUrl", "apiUrl", "dbUrl"] as const) {
-    if (config[key] !== undefined) output[key] = config[key];
-  }
-  return output;
-}
-
 function selection({ path: requested }: Selection): {
-  root: string; parent: string; path: string; parentConfig: Config; isRepository: boolean;
+  root: string; path: string; isRepository: boolean;
 } {
   const root = repositoryRoot();
   requireDirectory(root);
@@ -60,36 +43,30 @@ function selection({ path: requested }: Selection): {
     }
   }
   if (isRepository) requireRepository(path);
-  const parent = isRepository ? dirname(path) : path;
-  const parentConfig = isRepository && parent === root ? {} : readConfig(root, parent);
-  return { root, parent, path, parentConfig, isRepository };
+  return { root, path, isRepository };
 }
 
-function selected(input: Selection): { context: Record<string, unknown>; services: Service[] } {
-  const { root, parent, path, parentConfig, isRepository } = selection(input);
-  const paths = isRepository ? [path] : repositoryPaths(path);
-  const repositories = paths.map(path => {
-    const config = readConfig(root, path);
-    return { context: context(path, { ...config, ...parentConfig }), config };
-  });
-  const services = [
-    ...(!isRepository ? Object.entries(parentConfig.services ?? {}).map(([name, config]) => ({ name, path, ...config })) : []),
-    ...repositories.flatMap(({ context, config }) =>
-      Object.entries(config.services ?? {}).map(([name, config]) => ({ name, path: context.path, ...config }))),
-  ];
+function selected(input: Selection): { path: string; services: Service[] } {
+  const { root, path, isRepository } = selection(input);
+  const paths = isRepository ? [path] : [path, ...repositoryPaths(path)];
+  const services = paths.flatMap(path =>
+    Object.entries(readConfig(root, path).services ?? {}).map(([name, config]) => ({ name, path, ...config })));
   const filtered = input.service === undefined ? services : services.filter(({ name }) => name === input.service);
   if (input.service !== undefined && filtered.length === 0) throw new Error(`Unknown service: ${input.service}`);
-  return {
-    context: {
-      ...(isRepository ? repositories[0]?.context : context(path, parentConfig)),
-      ...(isRepository && parent !== root && { parent: context(parent, parentConfig) }),
-      ...(!isRepository && { repositories: repositories.map(({ context }) => context) }),
-    },
-    services: filtered,
-  };
+  return { path, services: filtered };
 }
 
-async function result(action: () => Promise<Record<string, unknown> & { services: ServiceResult[] }>): Promise<CallToolResult> {
+async function manage(input: Selection, action: "start" | "stop"): Promise<ServiceOutput> {
+  const selection = selected(input);
+  const services: ServiceSummary[] = [];
+  for (const service of selection.services) {
+    const { name, path, state, error } = await runService(service, action);
+    services.push({ name, path, ...(state !== undefined && { state }), ...(error !== undefined && { error }) });
+  }
+  return { path: selection.path, services };
+}
+
+async function result(action: () => Promise<ServiceOutput>): Promise<CallToolResult> {
   try {
     const output = await action();
     return {
@@ -116,41 +93,30 @@ export function registerServerTools(server: McpServer): void {
     {
       description:
         "Start configured services using Linux/systemd; reuse active units. " +
-        "Returns state, AGENTS.md and URLs (parent priority), not readiness guarantees. " +
-        "Failures include logs; stop failed units before restarting.",
+        "Returns compact states/errors, not readiness. Use server_logs for diagnostics; stop failed units before restarting.",
       inputSchema: selectionSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
-    async (input) => result(async () => {
-      const selection = selected(input);
-      const services: ServiceResult[] = [];
-      for (const service of selection.services) services.push(await runService(service, "start"));
-      return { ...selection.context, services };
-    }),
+    async input => result(() => manage(input, "start")),
   );
 
   server.registerTool("stop_server", {
     description:
       "Stop services via Linux/systemd: SIGINT, then SIGKILL after 30s, then optional cleanup. " +
-      "Returns final state, errors and logs. Already stopped services are unchanged.",
+      "Returns final states/errors; use server_logs for diagnostics. Already stopped services are unchanged.",
     inputSchema: selectionSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-  }, async input => result(async () => {
-    const selection = selected(input);
-    const services: ServiceResult[] = [];
-    for (const service of selection.services) services.push(await runService(service, "stop"));
-    return { path: selection.context.path, services };
-  }));
+  }, async input => result(() => manage(input, "stop")));
 
   server.registerTool("server_logs", {
     description:
-      "Read stdout/stderr and systemd diagnostics from journald; requires a readable Linux user journal. " +
+      "Read stdout/stderr and systemd diagnostics from accessible Linux journals, scoped to the current user's unit. " +
       "Returns current state, exit codes and logs (up to 64 KiB/service). Logs may contain secrets.",
     inputSchema: selectionSchema.extend({ lines: z.number().int().min(1).max(1000).default(100) }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   }, async input => result(async () => {
     const selection = selected(input);
     const services = await Promise.all(selection.services.map(service => runService(service, "logs", input.lines)));
-    return { path: selection.context.path, services };
+    return { path: selection.path, services };
   }));
 }

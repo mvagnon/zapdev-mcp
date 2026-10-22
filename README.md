@@ -4,18 +4,14 @@
 # zapdev-mcp
 
 > [!TIP]
-> **Prefer the terminal?** Use **[zapdev](https://github.com/mvagnon/zapdev)**,
-> the CLI powering this MCP server, for interactive commit and pull request workflows.
+> **Prefer the terminal?** Use **[zapdev](https://github.com/mvagnon/zapdev)** for interactive commits and pull requests.
 
 ## Project Introduction
 
-**zapdev-mcp** is a lightweight TypeScript MCP server that brings
-[zapdev](https://github.com/mvagnon/zapdev) Git workflows to your AI assistant.
-
-It prepares disposable GitHub checkouts, manages named development services and their logs,
-generates Conventional Commits, and creates pull requests through six tools
-exposed over stdio. Commit and PR
-commands run through `npx --yes zapdev`; no global zapdev installation is needed.
+**zapdev-mcp** brings [zapdev](https://github.com/mvagnon/zapdev) workflows to your AI assistant.
+Six stdio tools prepare disposable checkouts, manage services and logs, commit changes, and create pull requests.
+Commit and PR tools use `npx --yes zapdev`.
+No global installation is needed.
 
 ## Project Architecture
 
@@ -26,7 +22,7 @@ flowchart LR
   Server --> Servers["start_server / stop_server / server_logs"]
   Servers --> Config["~/.zapdev/config"]
   Servers --> Systemd["systemd user services"]
-  Servers --> Logs["journald / journalctl --user"]
+  Servers --> Logs["journald / journalctl --user-unit"]
   Server --> Commands["commit / pr"]
   Repos --> Git["Git / GitHub"]
   Commands --> CLI["npx --yes zapdev"]
@@ -37,7 +33,7 @@ flowchart LR
 - `repositories.ts`: shared repository paths and input validation.
 - `preparation.ts`: isolated repository and whole-group preparation.
 - `config.ts`: shared repository and group configuration.
-- `servers.ts`: server configuration, lifecycle commands, and startup context.
+- `servers.ts`: service selection and lifecycle tools.
 - `service-manager.ts`: isolated systemd user units and bounded log access.
 - `index.test.ts` / `servers.test.ts`: repository, service lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
@@ -53,11 +49,11 @@ flowchart LR
 | `ZD_HOOK_TIMEOUT` | No                  | Deadline per Git hook in seconds; zapdev defaults to `60`                    |
 | `ZD_REPOS_DIR`    | No                  | Absolute checkout root directory; defaults to `~/.zapdev/repos`              |
 
-The `ZD_REPOS_DIR` variable configures this server; the others configure zapdev.
-The model must support reasoning effort
-and strict JSON Schema Structured Outputs; OpenAI compatibility or JSON mode alone
-is not sufficient. See [zapdev model configuration](https://github.com/mvagnon/zapdev#model-configuration)
-for local and OpenRouter examples.
+`ZD_REPOS_DIR` configures this server.
+The other variables configure zapdev.
+The model must support reasoning effort and strict JSON Schema Structured Outputs.
+OpenAI compatibility or JSON mode alone is not enough.
+See [zapdev model configuration](https://github.com/mvagnon/zapdev#model-configuration) for examples.
 
 ## Setup
 
@@ -65,20 +61,19 @@ for local and OpenRouter examples.
 
 - **Node.js >= 20 and npm:** run the server and invoke zapdev through `npx`.
 - **Git:** clones repositories and performs Git operations.
-- **Linux with a running systemd user manager:** required for starting and stopping
-  configured services. Services run without sudo, independently of OpenCode's unit.
-- **`journalctl` and a readable user journal:** required for service logs and failure
-  diagnostics. `journalctl --user` requires persistent journal storage on the host.
-  Journal access/configuration errors are reported; the MCP does not change host settings.
-- **GitHub authentication:** configure non-interactive Git credentials for private
-  repositories; install GitHub CLI and run `gh auth login` for `pr`.
+- **Linux with a running systemd user manager:** required for service supervision.
+  Services run without sudo in independent units.
+- **`journalctl` and readable service journals:** required for `server_logs`.
+  Queries are scoped to the current user's unit and UID.
+- **GitHub authentication:** configure non-interactive Git credentials for private repositories.
+  Install GitHub CLI and run `gh auth login` for `pr`.
 - **LLM endpoint and model:** required for commit messages and PR titles.
 - **Gitleaks (recommended):** zapdev scans staged changes when it is available on `PATH`.
 
 ### MCP Client Configuration
 
-Once the package is published, add this server to a client supporting stdio MCP
-servers. The following uses the common `mcpServers` format; adapt it to your client:
+Add the server to a stdio MCP client.
+Adapt this `mcpServers` example to your client:
 
 ```json
 {
@@ -96,12 +91,14 @@ servers. The following uses the common `mcpServers` format; adapt it to your cli
 }
 ```
 
-Use your endpoint's complete Chat Completions URL and a model supporting strict
-structured outputs. Add `ZD_API_KEY` if authentication is required. Keep credentials
-private and do not commit them to your repository.
+Use the complete Chat Completions URL.
+Choose a model with strict structured output support.
+Set `ZD_API_KEY` when authentication is required.
+Never commit credentials.
 
-The MCP client must make `git`, `npx`, and, for PRs, `gh` available on the server's
-`PATH`. The server runs on the client's host, not in an isolated sandbox.
+Make `git` and `npx` available on the server's `PATH`.
+PR creation also requires `gh`.
+The server runs on the client's host, not in a sandbox.
 
 ## Usage
 
@@ -109,43 +106,42 @@ The MCP client must make `git`, `npx`, and, for PRs, `gh` available on the serve
 
 Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>-<repo>`.
 
-Set `ZD_REPOS_DIR` to an absolute path to override the root directory. For example,
-`ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner-repo`.
-An unset or empty value uses the default. Use a full path, not a literal `~`.
+Set `ZD_REPOS_DIR` to an absolute path to change the checkout root.
+For example, `ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner-repo`.
+Unset or empty values use the default.
+Use a full path, not a literal `~`.
 
-With `group: "my-group"`, the checkout is placed in
-`<ZD_REPOS_DIR>/my-group/owner-repo`. Existing `<owner>/<repo>` checkouts are not
-moved or deleted.
+With `group: "my-group"`, the checkout lives in `<ZD_REPOS_DIR>/my-group/owner-repo`.
+Other checkouts are not moved or deleted.
 
-| Argument | Required | Description                                                         |
-| -------- | -------- | ------------------------------------------------------------------- |
-| `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`; without `group`, selects the root checkout |
-| `group`  | Unless `repo` is supplied | Single group name; alone, refreshes all existing immediate child checkouts |
-| `branch` | No       | Remote branch for each selected repo; defaults to each remote's default branch |
+| Argument | Required                   | Description                                                                    |
+| -------- | -------------------------- | ------------------------------------------------------------------------------ |
+| `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`; without `group`, selects the root checkout  |
+| `group`  | Unless `repo` is supplied  | Single group name; alone, refreshes all existing immediate child checkouts     |
+| `branch` | No                         | Remote branch for each selected repo; defaults to each remote's default branch |
 
-`repo` and `group` are individually optional, but at least one must be nonempty.
-Empty strings are treated as omitted fields: `{"group":"my-group","repo":""}`
-is equivalent to `{"group":"my-group"}`. Other invalid values are still rejected.
+Supply at least one nonempty `repo` or `group`.
+Empty strings count as omitted fields.
+For example, `{"group":"my-group","repo":""}` equals `{"group":"my-group"}`.
+Other invalid values are rejected.
 
-With `repo`, returns only the absolute checkout `path`. With `group` alone,
-returns the group's `path` and `repositories: [{ path }]`. Only existing immediate
-Git checkouts are refreshed; other directories, hidden directories, and symlinks
-are ignored. GitHub origin URLs must match their checkout directory names.
+With `repo`, returns the absolute checkout `path`.
+With `group` alone, returns the group's `path` and `repositories: [{ path }]`.
+Only existing immediate Git checkouts are refreshed.
+Other directories, hidden directories, and symlinks are ignored.
+GitHub origin URLs must match checkout directory names.
 No new repositories are discovered or cloned in group-only mode.
-Use `start_server` to retrieve
-`AGENTS.md` instructions and configured URLs. This replaces `get_repo`;
-clients using the old tool name must switch to `prepare_repo`.
 
-After Git preparation and secret linking, runs the optional `prepareCommand` from
-`zapdev.json`. With `repo`, only that checkout's command runs, never its group's.
-For grouped checkouts, group-root secrets and checkout secrets are linked before
-the checkout's command. With `group` alone, each checkout is refreshed and runs
-its own command, then the group's command runs once, even for an empty group.
-Waits for each command (up to 180 seconds). Preparation stops at the
-first failure; later repositories and the group command are not processed.
-Command output is not included in
-successful responses; command failures return an MCP error. Completed Git changes
-and secret links are not rolled back. Without a command, nothing extra runs.
+After Git preparation and secret linking, runs the optional `prepareCommand` from `zapdev.json`.
+With `repo`, only that checkout's command runs.
+Grouped checkouts also link group-root secrets before running their command.
+With `group` alone, each checkout is refreshed and runs its own command.
+The group's command runs once afterward, even for an empty group.
+Each command has a 180-second timeout.
+Preparation stops at the first failure.
+Completed Git changes and secret links are not rolled back.
+Successful responses omit command output.
+Command failures return an MCP error.
 
 After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secrets`:
 
@@ -155,30 +151,33 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | `my-group/owner-repo/.env`        | `my-group/owner-repo/.env`                |
 | `owner-repo/.env.local`           | `owner-repo/.env.local` (without `group`) |
 
-Group-root files are linked with both `group` alone and `group + repo`, before
-checkout prepare commands. Only files directly inside the group secrets folder
-are linked into the group root, never into child checkouts. Preparing one grouped
-repo does not link other repos' secrets or run the group's prepare command.
-With `repo`, that checkout's secrets include subdirectories; other repositories
-are not linked. Grouped checkouts do not inherit secrets from outside their group.
-Missing secrets folders are ignored. Existing regular files (including old copies)
-are replaced with absolute symlinks; links to the expected source are preserved.
+Both `group` and `group + repo` link group-root files before checkout prepare commands.
+Group-root secrets stay in the group directory, never in child checkouts.
+Only the selected checkout's secrets are linked recursively.
+Other repos' secrets are untouched.
+Grouped checkouts do not inherit secrets from outside their group.
+Missing secrets folders are ignored.
+Existing regular files are replaced with absolute symlinks.
+Matching symlinks are reused.
 Source symlinks, unrelated destination symlinks, and Git metadata are rejected.
-Source permissions are unchanged: protect sensitive source files with `0600`.
-Changes to the source are immediately visible through the link, and editing
-through the link modifies the source secret. Keep repository symlinks ignored by
-Git to prevent accidental commits; this tool does not add ignore rules.
+Protect sensitive source files with `0600`.
+Source permissions are unchanged.
+Editing a symlink changes the source secret.
+Keep secret symlinks Git-ignored.
+This tool does not add ignore rules.
 
-**Destructive:** checkouts are disposable. Refreshing force-checks out the remote
-branch, overwrites tracked changes, and removes untracked files and directories
-except ignored files. Never use this tool for a checkout containing work you
-want to keep. Git authentication must work without interactive prompts.
+**Destructive:** checkouts are disposable.
+Refresh overwrites tracked changes and removes untracked files and directories.
+Ignored files are preserved.
+Never prepare a checkout containing work you want to keep.
+Git authentication must work without prompts.
 
 ### Repository configuration: `zapdev.json`
 
-Store configuration under `~/.zapdev/config`, following the same group/repository
-layout as secrets. These files are read directly, not copied or symlinked into
-checkouts. `ZD_REPOS_DIR` changes checkout locations, not configuration locations.
+Store configuration under `~/.zapdev/config`, using the same layout as secrets.
+Configuration files are read directly.
+They are not copied or symlinked into checkouts.
+`ZD_REPOS_DIR` changes checkout locations, not configuration locations.
 
 | Configuration path                                 | Applies to                |
 | -------------------------------------------------- | ------------------------- |
@@ -204,152 +203,143 @@ Copy this template to the applicable location and adapt the commands and URLs:
 }
 ```
 
-All five fields are optional; `{}` is valid. Missing files are treated as empty
-configuration. Omitted commands do not run; omitted URLs are absent from context.
-URLs must be valid absolute URLs, including database schemes. Malformed files,
-unknown fields, and source symlinks are rejected.
+All fields are optional.
+Missing files and `{}` mean empty configuration.
+Omitted commands do not run.
+URLs are metadata and are not returned by service tools.
+They must be absolute URLs, including database schemes.
+Malformed files, unknown fields, and source symlinks are rejected.
 
-| Field | Meaning |
-| ----- | ------- |
-| `prepareCommand` | Optional nonempty shell command executed by `prepare_repo` |
-| `services` | Optional object of named services for this checkout or group; `{}` defines none |
-| `services.<name>.startCommand` | Required nonempty shell command for that service |
-| `services.<name>.stopCommand` | Optional nonempty shell command executed after the service's processes stop |
-| `frontUrl`, `apiUrl`, `dbUrl` | Optional URLs returned in startup context |
+| Field                          | Meaning                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| `prepareCommand`               | Optional nonempty shell command executed by `prepare_repo`                      |
+| `services`                     | Optional object of named services for this checkout or group; `{}` defines none |
+| `services.<name>.startCommand` | Required nonempty shell command for that service                                |
+| `services.<name>.stopCommand`  | Optional nonempty shell command executed after the service's processes stop     |
+| `frontUrl`, `apiUrl`, `dbUrl`  | Optional URL metadata; omitted from tool responses                              |
 
-Service names contain 1–63 ASCII letters, digits, `_`, or `-`, beginning with a
-letter or digit. Names identify services in tool calls; unit IDs additionally
-include a hash of the absolute checkout/group path to avoid collisions.
+Service names contain 1–63 ASCII letters, digits, `_`, or `-`.
+They must begin with a letter or digit.
+Unit IDs hash the checkout/group path and service name to avoid collisions.
 
-Commands execute through `/bin/sh` in the corresponding checkout or group directory
-with the MCP server's environment. Only configure trusted commands: they run with
-your host permissions. Systemd-specific invocation variables are not forwarded.
-`stopCommand` is registered as `ExecStopPost`: systemd can also run it after a
-startup or runtime failure. Cleanup must tolerate partially initialized or already
-stopped services and be safe to repeat.
-Run development servers in the foreground, without `&` or wrappers that hide a
-nonzero exit code. Otherwise systemd supervises the wrapper rather than the server.
+Commands run through `/bin/sh` in their checkout or group directory.
+They inherit the MCP server's environment, except systemd invocation variables.
+Only configure trusted commands.
+They run with your host permissions.
+Run development servers in the foreground, without `&`.
+Do not hide nonzero exit codes behind wrappers.
+Otherwise systemd supervises the wrapper, not the server.
 
-**Breaking change:** top-level `startCommand` arrays are no longer accepted.
-Replace them with `services`. Startup responses now contain `services`, not
-`commands` or PIDs. Configured service supervision requires Linux/systemd.
+`stopCommand` uses `ExecStopPost`.
+Systemd can also run it after startup or runtime failures.
+Cleanup must tolerate partial startup and repeated execution.
 
-Commands and services are scoped to the selection; context keeps parent priority:
+Commands and services are scoped to the selection:
 
-- Service tools use an optional absolute `path`, defaulting to the MCP server's
-  working directory. A checkout path selects only that repo; a group path includes
-  the group's services and all immediate child checkouts' services.
+- Service tools default to the MCP server's working directory.
+- A checkout path selects only that repo.
+- A group path selects the group's services and all immediate child checkouts' services.
 - A group with `services: {}` does not disable child checkout services.
-  The service-name filter applies across all selected paths, including duplicate names.
-- `prepare_repo` uses `repo`/`group`: `repo` alone selects a root checkout, both
-  select one grouped checkout, and `group` alone refreshes all immediate child
-  checkouts before running the group's prepare command once.
-- Selecting a single checkout never runs group commands or services. Group commands
-  and services never replace child commands or services.
-- Each parent URL overrides the corresponding child URL. Other child URLs remain
-  available. Grouped repositories do not inherit standalone configuration.
-- Group `AGENTS.md` instructions take priority over repository instructions;
-  both files are returned separately when starting a whole group.
+- The service-name filter applies across all selected paths, including duplicate names.
+- `prepare_repo` with `repo` alone selects a root checkout.
+- `prepare_repo` with `repo` and `group` selects one grouped checkout.
+- `prepare_repo` with `group` alone prepares its immediate checkouts, then runs the group command.
+- Selecting one checkout never runs group commands or services.
+- Group commands and services never replace child commands or services.
 
 ### `start_server`
 
-Start a prepared repository or group and return its context. Does not clone,
-fetch, pull, switch branches, or reset repositories; call `prepare_repo` first
-for the repository or whole group.
+Start a prepared repository or group and return compact service states.
+No Git operations are performed.
+Call `prepare_repo` first.
 
-| Argument | Required | Description |
-| -------- | -------- | ----------- |
-| `path` | No | Absolute path inside a prepared checkout, a group directory, or `ZD_REPOS_DIR` itself; defaults to the server's working directory |
-| `service` | No | Configured service name; otherwise selects all services |
+| Argument  | Required | Description                                                                                                                       |
+| --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | No       | Absolute path inside a prepared checkout, a group directory, or `ZD_REPOS_DIR` itself; defaults to the server's working directory |
+| `service` | No       | Configured service name; otherwise selects all services                                                                           |
 
-Examples: `{}` uses the server's current directory;
-`{"path":"/srv/repos/my-group/owner-repo"}` selects one checkout;
-`{"path":"/srv/repos/my-group"}` selects the whole group (assuming
-`ZD_REPOS_DIR=/srv/repos`). A subdirectory inside a checkout resolves to its root.
-Selecting `ZD_REPOS_DIR` itself includes its own services and immediate child
-checkouts, not nested groups.
+With `ZD_REPOS_DIR=/srv/repos`:
 
-**The default is the server process's working directory, not the active folder in
-your MCP client.** Explicit paths and the default cwd must remain inside
-`ZD_REPOS_DIR`; outside paths and symlinked directories are rejected.
-When running `npm run inspect` from this source repository, supply `path`
-explicitly unless the server's working directory is already in your prepared tree.
+- `{}` uses the server's current directory.
+- `{"path":"/srv/repos/my-group/owner-repo"}` selects one checkout.
+- `{"path":"/srv/repos/my-group"}` selects the whole group.
 
-Omitted and empty `path` values both use the default cwd. `repo` and `group` are
-not accepted by service tools; those selectors belong to `prepare_repo` only.
+A subdirectory inside a checkout resolves to its root.
+Selecting `ZD_REPOS_DIR` itself includes its own services and immediate checkouts.
+Nested groups are not traversed.
 
-The `branch` argument is no longer accepted. Use `prepare_repo` to select an
-existing remote branch, or `commit` to switch to or create a local branch.
+**The default cwd belongs to the server process, not your MCP client's active folder.**
+Paths must remain inside `ZD_REPOS_DIR`.
+Outside paths and symlinked directories are rejected.
+When using `npm run inspect` from this source repository, supply `path` explicitly.
+Omitted and empty `path` values both use the server cwd.
+Service tools accept `path`, not `repo` or `group`.
 
-Returns `path`, root `agents_md` when present, and configured `frontUrl`, `apiUrl`,
-and `dbUrl`. A group also returns `repositories`, one entry per immediate child Git
-checkout, with its path, root instructions, and effective URLs after parent
-overrides. Other directories and symlinks are ignored. A single grouped repository
-also includes a `parent` entry with the group's path, instructions, and URLs.
+Returns only `path` and `services`.
+Each service contains `name`, `path`, observed `state`, and an optional `error`.
+Instructions, URLs, unit IDs, exit codes, and logs are omitted.
+Use `server_logs` for diagnostics.
+Read project instructions from disk.
 
-Each service runs in a separate transient systemd user unit. Already active units
-are reused rather than duplicated, including across MCP/OpenCode restarts. A unit
-in a failed state is reported as an error; stop it before starting again. Commands
-and environment changes take effect on the next fresh start, not on reused units.
+Each service uses a transient systemd user unit.
+Active units are reused across MCP restarts.
+Stop failed units before restarting them.
+Command and environment changes apply on the next fresh start.
 Units are not configured to restart automatically or survive a machine reboot.
-Remaining logged in is normally required; enable user lingering separately if
-services should continue after logout.
+Remaining logged in is normally required.
+Enable user lingering separately to keep services after logout.
 
-The response's `services` array contains `name`, `path`, stable unit `id`, systemd
-`state`/`subState`, `result`, main-process `exitCode`, and `logSource` (`journal`, or
-`file` for existing file-backed units). New starts are observed for about one second
-to detect immediate failures. A failure includes the latest logs and preserves launch
-diagnostics. `active`/`running` is a snapshot of process startup, **not server
-readiness** or a guarantee against later crashes; verify the relevant URL. Use
-`server_logs` to refresh the state and inspect later failures.
-Successful commands that exit are retained as `active`/`exited`, so a later
-`stop_server` can still run cleanup for externally managed services, such as
-`docker compose up -d`. Such services need an appropriate `stopCommand`.
+New starts are observed for about one second to detect immediate failures.
+Launch errors are preserved without automatically reading logs.
+**An active process is not a readiness guarantee.**
+Later crashes appear in `server_logs`.
+Successful commands can remain `active` after exiting.
+`server_logs` reports `subState: exited` for these units.
+Use a `stopCommand` for externally managed services such as `docker compose up -d`.
 
-Partial successes remain in the response: an individual service can include
-`error`, and the overall MCP response is marked as an error if any service fails.
+Partial successes remain in the response.
+Any service error marks the overall MCP response as an error.
 No automatic port discovery or health checks are performed.
 
 ### `stop_server`
 
 Accepts the same optional `path` (default server cwd) and `service` as `start_server`.
-First sends SIGINT (the signal used by Ctrl-C) to all processes in the unit and
-waits up to 30 seconds for them to exit. Remaining processes are forcibly stopped
-with SIGKILL before the optional `stopCommand` runs as cleanup. Cleanup has its
-own 30-second timeout. Without `stopCommand`, the sequence ends after process
-termination. Already stopped or absent units are left alone; unrelated systemd
-services cannot be selected.
+Sends SIGINT to all processes in the unit.
+After 30 seconds, remaining processes receive SIGKILL.
+The optional `stopCommand` then runs with its own 30-second timeout.
+Stopped or absent units are unchanged.
+Unrelated systemd units cannot be selected.
 
-Existing units keep their original settings and log destination. After updating
-the MCP, stop and start services once to recreate their units with journal logging;
-that first stop still uses the old settings. Existing log files are not deleted.
-
-Returns each service's final state/result, errors, and last 100 log lines. A failed
-cleanup is reported even if the application has stopped. Makes no Git changes.
+Returns the same compact summary as `start_server`.
+Failed cleanup is reported even if the application has stopped.
+No logs are read and no Git changes are made.
+Use `server_logs` for details.
 
 Example: `{"path":"/srv/repos/my-group","service":"backend"}`.
 
 ### `server_logs`
 
-Reads combined stdout/stderr and systemd diagnostics from the user journal.
-Logs remain available after service stops and MCP restarts, subject to the host's
-journal rotation, size limits, and retention policy. The MCP no longer creates or
-appends files under `~/.zapdev/services`. Existing file-backed units remain readable,
-alongside journal diagnostics; archived files are a fallback when the unit is gone
-and no journal entries are available. No old files are removed automatically.
+Reads stdout/stderr and systemd diagnostics directly from journald.
+Queries use `--user-unit` to filter by unit and UID.
+Logs can be stored in the system journal or a separate user journal.
+The MCP does not maintain log files.
+Retention and rotation follow the host's journal settings.
+Logs remain readable after service stops and MCP restarts until journal retention removes them.
 
-| Argument | Required | Description |
-| -------- | -------- | ----------- |
-| `path` | No | Same checkout/group scope as startup; defaults to the server cwd |
-| `service` | No | Select a configured name; otherwise returns every selected service |
-| `lines` | No | Last lines per service; defaults to 100, maximum 1000 |
+| Argument  | Required | Description                                                        |
+| --------- | -------- | ------------------------------------------------------------------ |
+| `path`    | No       | Same checkout/group scope as startup; defaults to the server cwd   |
+| `service` | No       | Select a configured name; otherwise returns every selected service |
+| `lines`   | No       | Last lines per service; defaults to 100, maximum 1000              |
 
-Returns `services` with `name`, `path`, unit `id`, current systemd state/result,
-`exitCode`, `logSource`, `logs`, and `truncated`. Failed services are marked as errors
-while their logs remain included. Responses contain at most the last 64 KiB per
-service, strip ANSI control sequences, and never stream to the MCP client.
-An empty result means no entries were found; journal access errors are reported
-separately, even when `journalctl` exits successfully with a warning.
+Returns service identity, unit `id`, state, result, `exitCode`, `logs`, and `truncated`.
+Failed services remain marked as errors alongside their logs.
+Responses contain at most the last 64 KiB per service.
+ANSI control sequences are removed.
+No logs are streamed to the MCP client.
+An empty result means no entries were found.
+Nonzero `journalctl` exits report reading errors.
+Nonfatal warnings do not fail a successful query.
 Logs may contain application secrets; do not share them without review.
 
 Example: `{"path":"/srv/repos/my-group/owner-repo","service":"frontend","lines":50}`.
@@ -361,19 +351,20 @@ Commit changes in a local Git repository using zapdev without interactive review
 | Argument | Required | Description                                                                    |
 | -------- | -------- | ------------------------------------------------------------------------------ |
 | `path`   | Yes      | Absolute path inside the local Git repository                                  |
-| `branch` | No       | Local branch to switch to or create; defaults to the current branch             |
+| `branch` | No       | Local branch to switch to or create; defaults to the current branch            |
 | `type`   | No       | Conventional Commit type; defaults to `auto`; append `!` for a breaking change |
 
-Runs `zapdev commit --yes --pull --no-push`, adding `--branch=<branch>` when
-supplied and `--type` when a non-automatic type is supplied. Without `branch`,
-commits on the current branch. Pulls fast-forward updates when an upstream is
-configured, commits changes, and never pushes.
+Runs `zapdev commit --yes --pull --no-push`.
+Optional arguments add `--branch=<branch>` and `--type=<type>`.
+Without `branch`, commits on the current branch.
+Pulls fast-forward updates when an upstream exists.
+Never pushes.
 
-Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`,
-`perf`, `test`, `build`, `ci`, `revert`. Explicit types can include `!`, such as `feat!`.
+Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`.
+Append `!` for breaking changes, such as `feat!`.
 
-**Privacy:** commit context is sent to the configured LLM endpoint. Gitleaks
-scanning is skipped when it is not installed.
+**Privacy:** commit context is sent to the configured LLM endpoint.
+Gitleaks scanning is skipped when it is not installed.
 
 ### `pr`
 
@@ -386,10 +377,11 @@ Push the current branch and create a GitHub pull request without confirmation.
 | `closes` | No       | HTTP(S) task URL to append as `Closes <url>` in the description               |
 
 Runs `zapdev pr --yes` with the supplied target branch and task reference.
-Requires a clean working tree and authenticated GitHub CLI. Full branch commit
-messages are sent to the configured LLM to generate the title; the description
-is built from the commits.
+Requires a clean working tree and authenticated GitHub CLI.
+Full branch commit messages are sent to the configured LLM to generate the title.
+The description is built from the commits.
 
-**Safety:** never force-pushes. Do not retry blindly after an error: the branch
-may already have been pushed or the PR created. Task closure depends on the
-linked provider's integration.
+**Safety:** never force-pushes.
+Check remote state before retrying an error.
+The branch may already be pushed or the PR created.
+Task closure depends on the linked provider's integration.
