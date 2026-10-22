@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { readConfig } from "./config.js";
-import { ensureDirectory, git, repositoryPaths, repositoryRoot, repoSchema, requireDirectory } from "./repositories.js";
+import { ensureDirectory, git, repositoryRoot, requireDirectory } from "./repositories.js";
 
 const exec = promisify(execFile);
 const home = homedir();
@@ -102,28 +102,10 @@ async function prepareRepository(root: string, repo: string, group?: string, bra
   }
 }
 
-/** Prepare one isolated checkout, or an existing group and all its immediate checkouts. */
+/** Prepare one isolated checkout, linking group and repository secrets when grouped. */
 export async function prepareSelection(
-  { repo, group, branch }: { repo?: string; group?: string; branch?: string },
-): Promise<{ path: string; repositories?: Array<{ path: string }> }> {
+  { repo, group, branch }: { repo: string; group?: string; branch?: string },
+): Promise<{ path: string }> {
   if (branch) await git(home, "check-ref-format", "--branch", branch);
-  const root = repositoryRoot();
-  if (repo) return prepareRepository(root, repo, group, branch);
-  if (group === undefined) throw new Error("Supply a repo or a group.");
-  requireDirectory(root);
-  const parent = join(root, group);
-  requireDirectory(parent);
-  const repos: string[] = [];
-  for (const path of repositoryPaths(parent)) {
-    const remote = await git(path, "config", "--get", "remote.origin.url");
-    const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)(.+)$/i.exec(remote);
-    const repo = repoSchema.parse(match?.[1]);
-    if (basename(path) !== repo.replace("/", "-")) throw new Error(`Checkout remote does not match its directory: ${path}`);
-    repos.push(repo);
-  }
-  const repositories: Array<{ path: string }> = [];
-  for (const repo of repos) repositories.push(await prepareRepository(root, repo, group, branch));
-  linkSelectedSecrets(parent, group);
-  await prepareCommand(root, parent);
-  return { path: parent, repositories };
+  return prepareRepository(repositoryRoot(), repo, group, branch);
 }

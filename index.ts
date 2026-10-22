@@ -58,15 +58,15 @@ server.registerTool(
   "prepare_repo",
   {
     description:
-      "Clone/reset disposable GitHub checkouts under ZD_REPOS_DIR (default ~/.zapdev/repos). Supply repo or group. " +
-      "Links scoped secrets and runs prepareCommand; group-only prepares existing child repos, then the group. " +
+      "Clone/reset a disposable GitHub checkout under ZD_REPOS_DIR (default ~/.zapdev/repos). Requires repo; group is optional. " +
+      "Links repository secrets and, when grouped, group-root secrets; runs only the checkout's prepareCommand. " +
       "Destructive: discards tracked edits and untracked non-ignored files. Editing secret symlinks changes source secrets; keep links Git-ignored.",
     inputSchema: repositorySelectionSchema
       .extend({
         branch: z
           .string()
           .optional()
-          .describe("Remote branch; default: each repo's remote default branch."),
+          .describe("Remote branch; default: the repo's remote default branch."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },

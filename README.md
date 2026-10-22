@@ -114,29 +114,22 @@ Use a full path, not a literal `~`.
 With `group: "my-group"`, the checkout lives in `<ZD_REPOS_DIR>/my-group/owner-repo`.
 Other checkouts are not moved or deleted.
 
-| Argument | Required                   | Description                                                                    |
-| -------- | -------------------------- | ------------------------------------------------------------------------------ |
-| `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`; without `group`, selects the root checkout  |
-| `group`  | Unless `repo` is supplied  | Single group name; alone, refreshes all existing immediate child checkouts     |
-| `branch` | No                         | Remote branch for each selected repo; defaults to each remote's default branch |
+| Argument | Required | Description                                                               |
+| -------- | -------- | ------------------------------------------------------------------------- |
+| `repo`   | Yes      | GitHub repository as `owner/repo`; without `group`, selects the root checkout |
+| `group`  | No       | Single group name containing the selected checkout                        |
+| `branch` | No       | Remote branch; defaults to the remote's default branch                     |
 
-Supply at least one nonempty `repo` or `group`.
-Empty strings count as omitted fields.
-For example, `{"group":"my-group","repo":""}` equals `{"group":"my-group"}`.
-Other invalid values are rejected.
+Supply a nonempty `repo`, optionally with `group`.
+An empty `group` counts as omitted.
+Calls with `group` alone or an empty `repo` are rejected.
 
-With `repo`, returns the absolute checkout `path`.
-With `group` alone, returns the group's `path` and `repositories: [{ path }]`.
-Only existing immediate Git checkouts are refreshed.
-Other directories, hidden directories, and symlinks are ignored.
-GitHub origin URLs must match checkout directory names.
-No new repositories are discovered or cloned in group-only mode.
+Returns the absolute checkout `path`.
+Only the selected checkout is prepared.
 
 After Git preparation and secret linking, runs the optional `prepareCommand` from `zapdev.json`.
-With `repo`, only that checkout's command runs.
+Only that checkout's command runs.
 Grouped checkouts also link group-root secrets before running their command.
-With `group` alone, each checkout is refreshed and runs its own command.
-The group's command runs once afterward, even for an empty group.
 Each command has a 180-second timeout.
 Preparation stops at the first failure.
 Completed Git changes and secret links are not rolled back.
@@ -151,7 +144,7 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | `my-group/owner-repo/.env`        | `my-group/owner-repo/.env`                |
 | `owner-repo/.env.local`           | `owner-repo/.env.local` (without `group`) |
 
-Both `group` and `group + repo` link group-root files before checkout prepare commands.
+With `repo + group`, both group-root files and repository secrets are linked before the checkout prepare command.
 Group-root secrets stay in the group directory, never in child checkouts.
 Only the selected checkout's secrets are linked recursively.
 Other repos' secrets are untouched.
@@ -243,7 +236,7 @@ Commands and services are scoped to the selection:
 - The service-name filter applies across all selected paths, including duplicate names.
 - `prepare_repo` with `repo` alone selects a root checkout.
 - `prepare_repo` with `repo` and `group` selects one grouped checkout.
-- `prepare_repo` with `group` alone prepares its immediate checkouts, then runs the group command.
+- `prepare_repo` requires `repo`; `group` alone is rejected.
 - Selecting one checkout never runs group commands or services.
 - Group commands and services never replace child commands or services.
 

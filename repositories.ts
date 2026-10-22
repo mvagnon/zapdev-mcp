@@ -18,7 +18,7 @@ export async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 /** GitHub repository identifier, normalized to owner/repo. */
-export const repoSchema = z
+const repoSchema = z
   .string()
   .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/)
   .transform((value) => value.replace(/\.git$/, "").toLowerCase())
@@ -27,11 +27,9 @@ export const repoSchema = z
 
 const optionalSelector = z.string().optional().transform(value => value === "" ? undefined : value);
 
-/** Optional repository/group selectors; empty strings are treated as omitted fields. */
+/** Required repository and optional group; an empty group selects a root checkout. */
 export const repositorySelectionSchema = z.object({
-  repo: optionalSelector.pipe(repoSchema.optional()).describe(
-    "GitHub owner/repo. Omit or leave empty for group-only preparation.",
-  ),
+  repo: repoSchema,
   group: optionalSelector.pipe(
     z.string().regex(/^[^/\\\0]+$/).refine(value => ![".", ".."].includes(value)).optional(),
   ).describe(
