@@ -94,7 +94,9 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
           assert.equal(readlinkSync(join(expected, ".env.local")), join(secrets, "owner-repo", ".env.local"));
         }
         if (group === "my-group") {
-          assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), "old copied secret");
+          assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), '{"group":true}');
+          assert.equal(readlinkSync(join(root, group, "config.json")), join(groupSecrets, "config.json"));
+          assert.equal(existsSync(join(expected, "config.json")), false);
           assert.equal(readFileSync(join(expected, ".env"), "utf8"), "GROUP=private");
           assert.equal(readFileSync(join(expected, "nested", "key.pem"), "utf8"), "nested private key");
           assert.equal(readlinkSync(join(expected, ".env")), join(repoSecrets, ".env"));
@@ -122,7 +124,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       prepareCommand: "test -L owner-repo/.env && test -f owner-repo/AGENTS.md && printf parent > prepared",
     }));
     writeFileSync(childConfig, JSON.stringify({
-      prepareCommand: "test -L .env && printf child > prepared",
+      prepareCommand: "test -L .env && test -L ../config.json && printf child > prepared",
     }));
     for (const group of [undefined, "my-group"]) {
       const parent = join(root, ...(group ? [group] : []));
@@ -202,7 +204,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     rmSync(groupConfig);
     symlinkSync(outside, groupConfig);
     const unsafeDestination = await client.callTool({
-      name: "prepare_repo", arguments: { group: "my-group" },
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.equal(unsafeDestination.isError, true);
     assert.equal(readFileSync(outside, "utf8"), "untouched");

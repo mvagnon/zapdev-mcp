@@ -93,6 +93,7 @@ async function prepareRepository(root: string, repo: string, group?: string, bra
     await git(path, "rev-parse", "--verify", `${reference}^{commit}`);
     await git(path, "checkout", "--quiet", "--force", "-B", branch, reference);
     await git(path, "clean", "--quiet", "-fd");
+    if (group !== undefined) linkSelectedSecrets(parent, group);
     linkSelectedSecrets(path, group, checkoutName);
     await prepareCommand(root, path);
     return { path };

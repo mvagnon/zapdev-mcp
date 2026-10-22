@@ -63,8 +63,8 @@ server.registerTool(
       "When group is supplied, place the checkout in <ZD_REPOS_DIR>/<group>/<owner>-<repo>. " +
       "repo and group are individually optional; omitted or empty strings are ignored, but at least one must be nonempty. " +
       "Supply group alone to refresh all existing immediate child checkouts, without cloning new repositories. " +
-      "With repo, links matching files from ~/.zapdev/secrets and runs prepareCommand only for that checkout, never for its group. " +
-      "With group alone, prepares each child, then links group-root secrets and runs the group's prepareCommand once. " +
+      "With repo, links matching checkout secrets from ~/.zapdev/secrets and, when grouped, group-root secrets before running only the checkout's prepareCommand. " +
+      "Group-root secrets stay in the group directory, not in child checkouts. With group alone, prepares each child and runs the group's prepareCommand once afterward. " +
       "Secret symlinks replace matching files; keep them Git-ignored to avoid committing them. " +
       "Edits through these links modify the source secrets. " +
       "After linking secrets, runs the optional prepareCommand from ~/.zapdev/config and waits up to 180 seconds. " +

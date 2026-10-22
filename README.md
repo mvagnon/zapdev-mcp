@@ -138,9 +138,10 @@ clients using the old tool name must switch to `prepare_repo`.
 
 After Git preparation and secret linking, runs the optional `prepareCommand` from
 `zapdev.json`. With `repo`, only that checkout's command runs, never its group's.
-With `group` alone, each checkout is refreshed and runs its own command, then
-group-root secrets are linked and the group's command runs once, even for an
-empty group. Waits for each command (up to 180 seconds). Preparation stops at the
+For grouped checkouts, group-root secrets and checkout secrets are linked before
+the checkout's command. With `group` alone, each checkout is refreshed and runs
+its own command, then the group's command runs once, even for an empty group.
+Waits for each command (up to 180 seconds). Preparation stops at the
 first failure; later repositories and the group command are not processed.
 Command output is not included in
 successful responses; command failures return an MCP error. Completed Git changes
@@ -154,8 +155,10 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | `my-group/owner-repo/.env`        | `my-group/owner-repo/.env`                |
 | `owner-repo/.env.local`           | `owner-repo/.env.local` (without `group`) |
 
-Group-root files are linked only when preparing `group` alone, not `group + repo`.
-Only files directly inside the group folder are linked into the group root.
+Group-root files are linked with both `group` alone and `group + repo`, before
+checkout prepare commands. Only files directly inside the group secrets folder
+are linked into the group root, never into child checkouts. Preparing one grouped
+repo does not link other repos' secrets or run the group's prepare command.
 With `repo`, that checkout's secrets include subdirectories; other repositories
 are not linked. Grouped checkouts do not inherit secrets from outside their group.
 Missing secrets folders are ignored. Existing regular files (including old copies)
