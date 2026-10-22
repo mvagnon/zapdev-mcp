@@ -18,20 +18,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { readConfig } from "./config.js";
-import { ensureDirectory, groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
+import { ensureDirectory, git, groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
 import { registerServerTools } from "./servers.js";
 
 const exec = promisify(execFile);
 const home = homedir();
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec("git", args, {
-    cwd,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" },
-    timeout: 180_000,
-  });
-  return stdout.trim();
-}
 
 function linkSecrets(source: string, destination: string, recursive: boolean): void {
   const directory = lstatSync(source, { throwIfNoEntry: false });

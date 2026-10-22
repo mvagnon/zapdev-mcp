@@ -1,7 +1,21 @@
+import { execFile } from "node:child_process";
 import { lstatSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { promisify } from "node:util";
 import { z } from "zod";
+
+const exec = promisify(execFile);
+
+/** Run Git without interactive credential prompts, returning trimmed standard output. */
+export async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await exec("git", args, {
+    cwd,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" },
+    timeout: 180_000,
+  });
+  return stdout.trim();
+}
 
 /** GitHub repository identifier, normalized to owner/repo. */
 export const repoSchema = z

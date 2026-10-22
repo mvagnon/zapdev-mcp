@@ -1,14 +1,12 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { readConfig, type Config } from "./config.js";
-import { groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
+import { git, groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
 
-const exec = promisify(execFile);
 type Selection = { repo?: string; group?: string };
 type Context = {
   path: string;
@@ -69,6 +67,28 @@ async function start({ path, command }: Command): Promise<{ path: string; pid: n
   return { path, pid: child.pid };
 }
 
+async function updateRepository(path: string, branch?: string): Promise<void> {
+  const remotes = (await git(path, "remote")).split("\n");
+  if (remotes.includes("origin")) await git(path, "fetch", "--quiet", "--prune", "origin");
+  const refs = (await git(path, "for-each-ref", "--format=%(refname)")).split("\n");
+  if (branch !== undefined) {
+    if (refs.includes(`refs/heads/${branch}`)) {
+      await git(path, "switch", "--quiet", "--no-guess", branch);
+    } else if (refs.includes(`refs/remotes/origin/${branch}`)) {
+      await git(path, "switch", "--quiet", "--track", "-c", branch, `refs/remotes/origin/${branch}`);
+    } else {
+      await git(path, "switch", "--quiet", "--no-track", "-c", branch);
+    }
+  }
+  const current = await git(path, "symbolic-ref", "--quiet", "--short", "HEAD");
+  let upstream = await git(path, "for-each-ref", "--format=%(upstream)", `refs/heads/${current}`);
+  if (!upstream && refs.includes(`refs/remotes/origin/${current}`)) {
+    upstream = `refs/remotes/origin/${current}`;
+    await git(path, "branch", `--set-upstream-to=${upstream}`, current);
+  }
+  if (upstream) await git(path, "pull", "--ff-only");
+}
+
 async function result(action: () => Promise<Record<string, unknown>>): Promise<CallToolResult> {
   try {
     const output = await action();
@@ -79,31 +99,45 @@ async function result(action: () => Promise<Record<string, unknown>>): Promise<C
   }
 }
 
-/** Register server lifecycle tools for prepared repositories and groups. */
+/** Register the server startup tool for prepared repositories and groups. */
 export function registerServerTools(server: McpServer): void {
   server.registerTool(
     "start_server",
     {
       description:
-        "Start an already prepared repository or group; never clones or refreshes checkouts. " +
+        "Start an already prepared repository or group; never clones or resets checkouts. " +
         "Supply repo, group, or both to select a repository within a group. " +
-        "Reads ~/.zapdev/config following the checkout layout. A parent startCommand runs once " +
-        "instead of child commands; otherwise starts each selected child's configured command. " +
+        "Before launching anything, switches every selected repository to branch when supplied, " +
+        "creating it from origin if available or the current HEAD otherwise; defaults to each current branch. " +
+        "Fetches origin and pulls fast-forward updates when an upstream exists; new local branches have no upstream. " +
+        "Git errors prevent all command launches; earlier checkout updates are not rolled back. " +
+        "Reads ~/.zapdev/config following the checkout layout. A parent's startCommand array replaces child arrays; " +
+        "otherwise starts every command in each selected child's array, one detached process per entry. " +
         "Commands run detached with output discarded. Returned PIDs confirm shell launch, not server readiness. " +
         "Returns root AGENTS.md and URLs, plus every immediate child checkout's instructions and URLs for a group. " +
         "A single grouped repository also includes its parent's instructions and URLs under parent. " +
         "Parent instructions take priority over child instructions; parent URLs override matching child fields. " +
         "Missing commands and URLs are omitted. May start some commands before an error; do not retry blindly.",
-      inputSchema: z.object({ repo: repoSchema.optional(), group: groupSchema }).strict(),
+      inputSchema: z.object({
+        repo: repoSchema.optional(),
+        group: groupSchema,
+        branch: z.string().min(1).optional()
+          .describe("Branch to switch to or create in every selected repository; defaults to each current branch."),
+      }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async (input) => result(async () => {
       const { root, parent, path, parentConfig } = selection(input);
+      if (input.branch !== undefined &&
+        await git(path, "check-ref-format", "--branch", input.branch) !== input.branch) {
+        throw new Error("Expected a literal branch name.");
+      }
       const paths = input.repo ? [path] : readdirSync(parent, { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") &&
           lstatSync(join(parent, entry.name, ".git"), { throwIfNoEntry: false })?.isDirectory())
         .map((entry) => join(parent, entry.name))
         .sort();
+      for (const path of paths) await updateRepository(path, input.branch);
       const repositories = paths.map((path) => {
         const config = { ...readConfig(root, path), ...parentConfig };
         return { context: context(path, config), config };
@@ -111,9 +145,9 @@ export function registerServerTools(server: McpServer): void {
       const output = input.repo ? repositories[0]?.context : context(parent, parentConfig);
       const parentContext = input.repo && input.group !== undefined ? context(parent, parentConfig) : undefined;
       const commands: Command[] = parentConfig.startCommand !== undefined
-        ? [{ path: parent, command: parentConfig.startCommand }]
-        : repositories.flatMap(({ context, config }) => config.startCommand === undefined
-          ? [] : [{ path: context.path, command: config.startCommand }]);
+        ? parentConfig.startCommand.map((command) => ({ path: parent, command }))
+        : repositories.flatMap(({ context, config }) =>
+          (config.startCommand ?? []).map((command) => ({ path: context.path, command })));
       const launched: Array<{ path: string; pid: number }> = [];
       for (const command of commands) launched.push(await start(command));
       return {
@@ -122,30 +156,6 @@ export function registerServerTools(server: McpServer): void {
         ...(!input.repo && { repositories: repositories.map(({ context }) => context) }),
         ...(launched.length > 0 && { commands: launched }),
       };
-    }),
-  );
-
-  server.registerTool(
-    "stop_server",
-    {
-      description:
-        "Run stopCommand for an already prepared owner/repo, with optional group. " +
-        "Reads ~/.zapdev/config following the checkout layout. The group's stopCommand takes priority " +
-        "and runs in the group directory; otherwise the repository command runs in its checkout. " +
-        "A parent stopCommand may stop the whole group. Waits up to 180 seconds; does nothing if absent. " +
-        "Executes trusted shell configuration, not PID-based termination. Do not retry blindly after errors.",
-      inputSchema: z.object({ repo: repoSchema, group: groupSchema }).strict(),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-    },
-    async (input) => result(async () => {
-      const { root, parent, path, parentConfig } = selection(input);
-      const command = parentConfig.stopCommand ?? readConfig(root, path).stopCommand;
-      if (command === undefined) return { path };
-      const { stdout, stderr } = await exec("/bin/sh", ["-c", command], {
-        cwd: parentConfig.stopCommand === undefined ? path : parent,
-        timeout: 180_000,
-      });
-      return { path, stdout: stdout.trim(), stderr: stderr.trim() };
     }),
   );
 }

@@ -5,8 +5,7 @@ import { z } from "zod";
 
 const configSchema = z.object({
   prepareCommand: z.string().trim().min(1).optional(),
-  startCommand: z.string().trim().min(1).optional(),
-  stopCommand: z.string().trim().min(1).optional(),
+  startCommand: z.array(z.string().trim().min(1)).optional(),
   frontUrl: z.url().optional(),
   apiUrl: z.url().optional(),
   dbUrl: z.url().optional(),
@@ -33,6 +32,6 @@ export function readConfig(root: string, path: string): Config {
   try {
     return configSchema.parse(JSON.parse(readFileSync(file, "utf8")));
   } catch {
-    throw new Error(`Invalid configuration in ${file}: expected JSON with optional nonempty commands and valid URLs.`);
+    throw new Error(`Invalid configuration in ${file}: expected JSON with an optional nonempty prepareCommand, a startCommand array of nonempty strings, and valid URLs.`);
   }
 }

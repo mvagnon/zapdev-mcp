@@ -12,8 +12,8 @@
 **zapdev-mcp** is a lightweight TypeScript MCP server that brings
 [zapdev](https://github.com/mvagnon/zapdev) Git workflows to your AI assistant.
 
-It prepares disposable GitHub checkouts, starts and stops development servers,
-generates Conventional Commits, and creates pull requests through five tools
+It prepares disposable GitHub checkouts, starts development servers,
+generates Conventional Commits, and creates pull requests through four tools
 exposed over stdio. Commit and PR
 commands run through `npx --yes zapdev`; no global zapdev installation is needed.
 
@@ -23,7 +23,7 @@ commands run through `npx --yes zapdev`; no global zapdev installation is needed
 flowchart LR
   Client["MCP client"] -->|stdio| Server["index.ts"]
   Server --> Repos["prepare_repo"]
-  Server --> Servers["start_server / stop_server"]
+  Server --> Servers["start_server"]
   Servers --> Config["~/.zapdev/config"]
   Server --> Commands["commit / pr"]
   Repos --> Git["Git / GitHub"]
@@ -166,25 +166,26 @@ Copy this template to the applicable location and adapt the commands and URLs:
 ```json
 {
   "prepareCommand": "docker compose pull",
-  "startCommand": "docker compose up",
-  "stopCommand": "docker compose down",
+  "startCommand": ["docker compose up", "npm run dev"],
   "frontUrl": "http://localhost:3000",
   "apiUrl": "http://localhost:4000",
   "dbUrl": "postgresql://localhost:5432/app"
 }
 ```
 
-All six fields are optional; `{}` is valid. Missing files are treated as empty
+All five fields are optional; `{}` is valid. Missing files are treated as empty
 configuration. Omitted commands do not run; omitted URLs are absent from context.
-Commands must be nonempty strings; URLs must be valid absolute URLs, including
+`prepareCommand` must be a nonempty string; `startCommand` must be an array of
+nonempty strings. An empty array disables startup commands, including child
+commands when configured on a group. URLs must be valid absolute URLs, including
 database schemes. Malformed files and source symlinks are rejected. Unknown fields
 are ignored to allow future additions.
 
 Commands execute through `/bin/sh` in the corresponding checkout or group directory
 with the MCP server's environment. Only configure trusted commands: they run with
-your host permissions. Replace the Docker Compose commands with a matching pair
-for your project if needed. A start command may itself launch multiple services;
-stop commands must handle their shutdown.
+your host permissions. Each startup array entry launches its own detached process.
+**Breaking change:** replace string `startCommand` values with arrays.
+`stop_server` and `stopCommand` have been removed; manage shutdown externally.
 
 The parent takes priority **per field**:
 
@@ -192,10 +193,8 @@ The parent takes priority **per field**:
   runs in the group directory, **once per `prepare_repo` call**, after that
   repository's Git preparation and secret linking. Other children might not yet
   be prepared. Without a parent command, the child's command runs in its checkout.
-- A group's `startCommand` runs **once**, replacing all selected child start
-  commands. Without it, each selected child's start command runs in its checkout.
-- A group's `stopCommand` replaces the selected child's stop command and runs
-  in the group directory. It may therefore stop the entire group.
+- A group's `startCommand` array runs **once**, replacing all selected child start
+  arrays. Without it, each selected child's array runs in its checkout.
 - Each parent URL overrides the corresponding child URL. Other child URLs remain
   available. Grouped repositories do not inherit standalone configuration.
 - Group `AGENTS.md` instructions take priority over repository instructions;
@@ -203,16 +202,27 @@ The parent takes priority **per field**:
 
 ### `start_server`
 
-Start a prepared repository or group and return its context. Does not clone,
-refresh, or reset repositories; call `prepare_repo` first for each repository.
+Start a prepared repository or group and return its context. Does not clone or
+reset repositories; call `prepare_repo` first for each repository.
 
 | Argument | Required                   | Description                                                      |
 | -------- | -------------------------- | ---------------------------------------------------------------- |
 | `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
 | `group`  | Unless `repo` is supplied  | Group name; combine with `repo` to select one grouped repository |
+| `branch` | No                        | Branch to switch to or create; defaults to each current branch  |
 
 Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
 `{"repo":"owner/repo","group":"my-group"}`.
+
+Before starting any command, fetches `origin` when configured and switches each
+selected repository to `branch` if supplied. Existing remote branches are tracked;
+otherwise a new local branch is created from the current HEAD without an upstream.
+Existing branches without an upstream track the matching `origin` branch when
+available. Runs `git pull --ff-only` when an upstream exists; otherwise skips pull.
+A group-wide start applies `branch` to every immediate child checkout, even when
+commands run in the parent. Context is read after Git updates. Local changes are
+not discarded. A Git failure prevents all launches, but previous Git updates are
+not rolled back.
 
 Returns `path`, root `agents_md` when present, and configured `frontUrl`, `apiUrl`,
 and `dbUrl`. A group also returns `repositories`, one entry per immediate child Git
@@ -222,24 +232,11 @@ also includes a `parent` entry with the group's path, instructions, and URLs.
 
 Configured commands run in the background with output discarded so development
 servers do not block the MCP call or corrupt stdio. `commands` lists launch paths
-and shell PIDs when commands were launched. This confirms process launch, **not
-server readiness**; verify the relevant URL before using it. No automatic port
+and one shell PID per configured array entry when commands were launched, in array
+order. This confirms process launch, **not server readiness**; verify the relevant
+URL before using it. No automatic port
 discovery, health checks, or duplicate-start protection is performed. Commands
 can partially succeed before an error; do not retry blindly.
-
-### `stop_server`
-
-Run the configured stop command for a prepared repository.
-
-| Argument | Required | Description                       |
-| -------- | -------- | --------------------------------- |
-| `repo`   | Yes      | GitHub repository as `owner/repo` |
-| `group`  | No       | Group containing the repository   |
-
-Waits for the command to finish (up to 180 seconds). Returns the repository `path`
-and command `stdout` / `stderr`; without a command, returns only `path`. Processes
-are not automatically killed using the startup PIDs. Configure `stopCommand` to
-stop the services started by `startCommand`. Do not retry blindly after errors.
 
 ### `commit`
 
