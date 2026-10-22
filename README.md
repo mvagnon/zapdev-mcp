@@ -76,7 +76,7 @@ servers. The following uses the common `mcpServers` format; adapt it to your cli
   "mcpServers": {
     "zapdev": {
       "command": "npx",
-      "args": ["--yes", "zapdev-mcp@latest"],
+      "args": ["--yes", "zapdev-mcp"],
       "env": {
         "ZD_URL": "http://localhost:1234/v1/chat/completions",
         "ZD_MODEL": "your-local-model-id",
@@ -209,7 +209,7 @@ reset repositories; call `prepare_repo` first for each repository.
 | -------- | -------------------------- | ---------------------------------------------------------------- |
 | `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
 | `group`  | Unless `repo` is supplied  | Group name; combine with `repo` to select one grouped repository |
-| `branch` | No                        | Branch to switch to or create; defaults to each current branch  |
+| `branch` | No                         | Branch to switch to or create; defaults to each current branch   |
 
 Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
 `{"repo":"owner/repo","group":"my-group"}`.
