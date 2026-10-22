@@ -26,7 +26,7 @@ flowchart LR
   Server --> Servers["start_server / stop_server / server_logs"]
   Servers --> Config["~/.zapdev/config"]
   Servers --> Systemd["systemd user services"]
-  Servers --> Logs["~/.zapdev/services/*.log"]
+  Servers --> Logs["journald / journalctl --user"]
   Server --> Commands["commit / pr"]
   Repos --> Git["Git / GitHub"]
   Commands --> CLI["npx --yes zapdev"]
@@ -67,6 +67,9 @@ for local and OpenRouter examples.
 - **Git:** clones repositories and performs Git operations.
 - **Linux with a running systemd user manager:** required for starting and stopping
   configured services. Services run without sudo, independently of OpenCode's unit.
+- **`journalctl` and a readable user journal:** required for service logs and failure
+  diagnostics. `journalctl --user` requires persistent journal storage on the host.
+  Journal access/configuration errors are reported; the MCP does not change host settings.
 - **GitHub authentication:** configure non-interactive Git credentials for private
   repositories; install GitHub CLI and run `gh auth login` for `pr`.
 - **LLM endpoint and model:** required for commit messages and PR titles.
@@ -217,6 +220,8 @@ your host permissions. Systemd-specific invocation variables are not forwarded.
 `stopCommand` is registered as `ExecStopPost`: systemd can also run it after a
 startup or runtime failure. Cleanup must tolerate partially initialized or already
 stopped services and be safe to repeat.
+Run development servers in the foreground, without `&` or wrappers that hide a
+nonzero exit code. Otherwise systemd supervises the wrapper rather than the server.
 
 **Breaking change:** top-level `startCommand` arrays are no longer accepted.
 Replace them with `services`. Startup responses now contain `services`, not
@@ -271,8 +276,12 @@ Remaining logged in is normally required; enable user lingering separately if
 services should continue after logout.
 
 The response's `services` array contains `name`, `path`, stable unit `id`, systemd
-`state`/`subState`, `result`, and main-process `exitCode`. `active`/`running`
-confirms process startup, **not server readiness**; verify the relevant URL.
+`state`/`subState`, `result`, main-process `exitCode`, and `logSource` (`journal`, or
+`file` for existing file-backed units). New starts are observed for about one second
+to detect immediate failures. A failure includes the latest logs and preserves launch
+diagnostics. `active`/`running` is a snapshot of process startup, **not server
+readiness** or a guarantee against later crashes; verify the relevant URL. Use
+`server_logs` to refresh the state and inspect later failures.
 Successful commands that exit are retained as `active`/`exited`, so a later
 `stop_server` can still run cleanup for externally managed services, such as
 `docker compose up -d`. Such services need an appropriate `stopCommand`.
@@ -291,9 +300,9 @@ own 30-second timeout. Without `stopCommand`, the sequence ends after process
 termination. Already stopped or absent units are left alone; unrelated systemd
 services cannot be selected.
 
-Existing units keep their original shutdown settings. After updating the MCP,
-stop and start services once to recreate their units with the new ordering; that
-first stop still follows the old ordering.
+Existing units keep their original settings and log destination. After updating
+the MCP, stop and start services once to recreate their units with journal logging;
+that first stop still uses the old settings. Existing log files are not deleted.
 
 Returns each service's final state/result, errors, and last 100 log lines. A failed
 cleanup is reported even if the application has stopped. Makes no Git changes.
@@ -302,8 +311,12 @@ Example: `{"group":"my-group","service":"backend"}`.
 
 ### `server_logs`
 
-Reads combined stdout/stderr from private files under `~/.zapdev/services`, not
-the journal. Logs remain available after service stops and MCP restarts.
+Reads combined stdout/stderr and systemd diagnostics from the user journal.
+Logs remain available after service stops and MCP restarts, subject to the host's
+journal rotation, size limits, and retention policy. The MCP no longer creates or
+appends files under `~/.zapdev/services`. Existing file-backed units remain readable,
+alongside journal diagnostics; archived files are a fallback when the unit is gone
+and no journal entries are available. No old files are removed automatically.
 
 | Argument | Required | Description |
 | -------- | -------- | ----------- |
@@ -311,11 +324,13 @@ the journal. Logs remain available after service stops and MCP restarts.
 | `service` | No | Select a configured name; otherwise returns every selected service |
 | `lines` | No | Last lines per service; defaults to 100, maximum 1000 |
 
-Returns `services` with `name`, `path`, unit `id`, `logs`, and `truncated`. Each read
-is capped at the last 64 KiB, strips ANSI control sequences, and never streams.
-Missing log files return empty logs. Log files append across starts; configure
-external rotation if needed. Logs may contain application secrets; do not share
-them without review.
+Returns `services` with `name`, `path`, unit `id`, current systemd state/result,
+`exitCode`, `logSource`, `logs`, and `truncated`. Failed services are marked as errors
+while their logs remain included. Responses contain at most the last 64 KiB per
+service, strip ANSI control sequences, and never stream to the MCP client.
+An empty result means no entries were found; journal access errors are reported
+separately, even when `journalctl` exits successfully with a warning.
+Logs may contain application secrets; do not share them without review.
 
 Example: `{"repo":"owner/repo","service":"frontend","lines":50}`.
 

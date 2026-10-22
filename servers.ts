@@ -104,7 +104,8 @@ export function registerServerTools(server: McpServer): void {
         "With group alone, selects the group's services and all immediate child checkouts' services. " +
         "Each service gets an independent systemd user unit and persistent logs; no PIDs to manage. " +
         "Already active services are reused; failed services return errors until stopped. " +
-        "Returns service names, stable unit IDs and systemd states, not readiness guarantees. " +
+        "Observes new services for up to one second to detect immediate failures, including their latest logs on errors. " +
+        "Returns service names, stable unit IDs and observed systemd states, not readiness guarantees. " +
         "Returns root AGENTS.md and URLs, plus every immediate child checkout's instructions and URLs for a group. " +
         "A single grouped repository also includes its parent's instructions and URLs under parent. " +
         "Parent instructions take priority over child instructions; parent URLs override matching child fields. " +
@@ -139,11 +140,12 @@ export function registerServerTools(server: McpServer): void {
 
   server.registerTool("server_logs", {
     description:
-      "Read persisted stdout/stderr logs for named services in a prepared repository or group. " +
+      "Read stdout/stderr and systemd diagnostics from the user journal for named services in a prepared repository or group. " +
       "Uses the same repository/group scope and optional service filter as start_server. " +
-      "Returns the last lines (default 100, maximum 1000), reading at most 64 KiB per service, without streaming. " +
+      "Returns current systemd states, exit codes and the last lines (default 100, maximum 1000), capped at 64 KiB per service, without streaming. " +
       "ANSI control sequences are removed; truncated indicates omitted older content. " +
-      "Logs remain available after stopping services or restarting the MCP. Logs may contain application secrets.",
+      "Requires journalctl and readable user journals; access errors are reported, not hidden as empty logs. " +
+      "Journal retention follows host configuration. Existing file-backed units and archived files remain readable. Logs may contain application secrets.",
     inputSchema: selectionSchema.extend({ lines: z.number().int().min(1).max(1000).default(100) }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   }, async input => result(async () => {

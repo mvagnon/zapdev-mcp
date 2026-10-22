@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -18,8 +18,11 @@ test("named services preserve parent context and support start, stop, and bounde
   const parentConfig = join(config, "zapdev.json");
   const stateFile = join(directory, "units.json");
   const clients: Client[] = [];
-  type Unit = { state: string; result: string; args: string[] };
-  type Service = { id: string; name: string; path: string; state: string; error?: string; logs?: string; truncated?: boolean };
+  type Unit = { state: string; result: string; args: string[]; logs?: string; journalError?: string; exitCode?: number };
+  type Service = {
+    id: string; name: string; path: string; state: string; exitCode?: number;
+    error?: string; logs?: string; truncated?: boolean; logSource?: string;
+  };
   const units = (): Record<string, Unit> => JSON.parse(readFileSync(stateFile, "utf8"));
   const connect = async (): Promise<Client> => {
     const client = new Client({ name: "server-test", version: "1.0.0" });
@@ -40,12 +43,20 @@ const file = process.env.TEST_UNITS;
 const units = JSON.parse(fs.readFileSync(file, "utf8"));
 const id = args.at(-1);
 const unit = units[id];
+if (unit?.exitAt && Date.now() >= unit.exitAt && unit.state === "active") {
+  unit.state = "failed";
+  unit.result = "exit-code";
+  unit.exitCode = 127;
+  unit.logs = "expo: command not found\\n";
+  fs.writeFileSync(file, JSON.stringify(units));
+}
 if (args.includes("show")) {
   console.log("LoadState=" + (unit ? "loaded" : "not-found"));
   console.log("ActiveState=" + (unit?.state ?? "inactive"));
   console.log("SubState=" + (unit?.state === "active" ? "running" : "dead"));
   console.log("Result=" + (unit?.result ?? "success"));
-  console.log("ExecMainStatus=" + (unit?.result === "exit-code" ? 1 : 0));
+  console.log("ExecMainStatus=" + (unit?.exitCode ?? (unit?.result === "exit-code" ? 1 : 0)));
+  console.log("StandardOutput=" + (unit?.args.find(arg => arg.startsWith("--property=StandardOutput="))?.slice(26).split(":")[0] ?? "journal"));
   process.exit(unit ? 0 : 4);
 }
 if (args.includes("stop") && unit) {
@@ -63,8 +74,22 @@ const id = args.find(arg => arg.startsWith("--unit=")).slice(7);
 if (units[id]?.state === "active") process.exit(1);
 const failed = args.at(-1).includes("fail-start");
 units[id] = { state: failed ? "failed" : "active", result: failed ? "exit-code" : "success", args };
+if (args.at(-1).includes("fail-later")) units[id].exitAt = Date.now() + 150;
+if (failed) units[id].logs = "Backend startup failed\\n";
 fs.writeFileSync(file, JSON.stringify(units));
 if (failed) { console.error("Start failed"); process.exit(1); }
+`, { mode: 0o755 });
+    writeFileSync(join(directory, "journalctl"), `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const units = JSON.parse(fs.readFileSync(process.env.TEST_UNITS, "utf8"));
+const id = args.find(arg => arg.startsWith("--unit="))?.slice(7);
+const unit = units[id];
+if (unit?.journalError) { console.error(unit.journalError); process.exit(0); }
+const limit = Number(args.find(arg => arg.startsWith("--lines="))?.slice(8));
+const entries = (unit?.logs ?? "").split("\\n");
+if (entries.at(-1) === "") entries.pop();
+process.stdout.write(entries.slice(-limit).join("\\n") + (entries.length ? "\\n" : ""));
 `, { mode: 0o755 });
     for (const path of [first, second, standalone]) {
       execFileSync("git", ["init", "--quiet", path]);
@@ -118,9 +143,11 @@ if (failed) { console.error("Start failed"); process.exit(1); }
     assert.equal(args.at(-1), "printf 'hello $$HOME %s\\n'");
     assert.ok(args.includes(`--property=ExecStopPost=:/bin/sh -c ${JSON.stringify("printf 'stop $HOME'")}`));
     assert.ok(!args.some(arg => arg.startsWith("--property=ExecStop=")));
-    const logArg = args.find(arg => arg.startsWith("--property=StandardOutput=append:"))!;
-    const logPath = logArg.slice("--property=StandardOutput=append:".length);
-    assert.ok(logPath.startsWith(join(directory, ".zapdev", "services")));
+    assert.ok(args.includes("--property=StandardOutput=journal"));
+    assert.ok(args.includes("--property=StandardError=journal"));
+    assert.equal(service.logSource, "journal");
+    const logPath = join(directory, ".zapdev", "services", `${service.id}.log`);
+    assert.equal(existsSync(logPath), false);
 
     const other = await connect();
     const repeated = await other.callTool({ name: "start_server", arguments: { group: "my-group" } });
@@ -152,15 +179,34 @@ if (failed) { console.error("Start failed"); process.exit(1); }
       assert.equal(units()[output.services[2]!.id]?.state, "active");
     }
 
-    writeFileSync(logPath, "old\nfirst\nsecond\n");
+    const journal = units();
+    journal[service.id]!.logs = "old\nfirst\nsecond\n";
+    writeFileSync(stateFile, JSON.stringify(journal));
     const logs = await client.callTool({ name: "server_logs", arguments: { group: "my-group", service: "frontend", lines: 2 } });
     assert.notEqual(logs.isError, true, JSON.stringify(logs.content));
     assert.equal((logs.structuredContent?.services as Service[])[0]?.logs, "first\nsecond\n");
     assert.equal((logs.structuredContent?.services as Service[])[0]?.truncated, true);
-    writeFileSync(logPath, "x".repeat(200_000));
+    assert.equal((logs.structuredContent?.services as Service[])[0]?.state, "active");
+    journal[service.id]!.logs = "x".repeat(500_000);
+    writeFileSync(stateFile, JSON.stringify(journal));
     const bounded = await client.callTool({ name: "server_logs", arguments: { group: "my-group" } });
     assert.ok(Buffer.byteLength((bounded.structuredContent?.services as Service[])[0]!.logs!) <= 65_536);
     assert.equal((bounded.structuredContent?.services as Service[])[0]?.truncated, true);
+    journal[service.id]!.journalError = "Permission denied reading journal";
+    writeFileSync(stateFile, JSON.stringify(journal));
+    const denied = await client.callTool({ name: "server_logs", arguments: { group: "my-group", service: "frontend" } });
+    assert.equal(denied.isError, true);
+    assert.match((denied.structuredContent?.services as Service[])[0]?.error ?? "", /Permission denied/);
+    delete journal[service.id]!.journalError;
+    journal[service.id]!.logs = "";
+    journal[service.id]!.args = args.map(arg => arg === "--property=StandardOutput=journal" ? `--property=StandardOutput=append:${logPath}` : arg);
+    writeFileSync(stateFile, JSON.stringify(journal));
+    mkdirSync(join(directory, ".zapdev", "services"), { recursive: true });
+    writeFileSync(logPath, "Legacy logs remain available\n");
+    const legacy = await client.callTool({ name: "server_logs", arguments: { group: "my-group", service: "frontend" } });
+    assert.notEqual(legacy.isError, true, JSON.stringify(legacy.content));
+    assert.equal((legacy.structuredContent?.services as Service[])[0]?.logs, "Legacy logs remain available\n");
+    assert.equal((legacy.structuredContent?.services as Service[])[0]?.logSource, "file");
     rmSync(logPath);
     symlinkSync(join(group, "AGENTS.md"), logPath);
     assert.equal((await client.callTool({ name: "server_logs", arguments: { group: "my-group" } })).isError, true);
@@ -169,6 +215,7 @@ if (failed) { console.error("Start failed"); process.exit(1); }
     const stopped = await other.callTool({ name: "stop_server", arguments: { group: "my-group", service: "frontend" } });
     assert.notEqual(stopped.isError, true, JSON.stringify(stopped.content));
     assert.equal((stopped.structuredContent?.services as Service[])[0]?.state, "inactive");
+    assert.equal((stopped.structuredContent?.services as Service[])[0]?.logs, "Stopped logs remain available\n");
     assert.notEqual((await client.callTool({ name: "stop_server", arguments: { group: "my-group" } })).isError, true);
     assert.equal((await client.callTool({ name: "server_logs", arguments: { group: "my-group" } })).isError, undefined);
 
@@ -187,6 +234,7 @@ if (failed) { console.error("Start failed"); process.exit(1); }
     writeFileSync(parentConfig, JSON.stringify({ services: {
       good: { startCommand: "npm run dev" },
       bad: { startCommand: "fail-start" },
+      late: { startCommand: "fail-later" },
       cleanup: { startCommand: "npm run worker", stopCommand: "fail-stop" },
     } }));
     const partial = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
@@ -194,6 +242,20 @@ if (failed) { console.error("Start failed"); process.exit(1); }
     const partialServices = partial.structuredContent?.services as Service[];
     assert.equal(partialServices.find(({ name }) => name === "good")?.state, "active");
     assert.match(partialServices.find(({ name }) => name === "bad")?.error ?? "", /failed/i);
+    assert.match(partialServices.find(({ name }) => name === "bad")?.error ?? "", /Start failed/);
+    assert.equal(partialServices.find(({ name }) => name === "bad")?.logs, "Backend startup failed\n");
+    assert.equal(partialServices.find(({ name }) => name === "late")?.state, "failed");
+    assert.equal(partialServices.find(({ name }) => name === "late")?.exitCode, 127);
+    assert.match(partialServices.find(({ name }) => name === "late")?.logs ?? "", /expo: command not found/);
+    const running = partialServices.find(({ name }) => name === "good")!;
+    const runtimeFailure = units();
+    Object.assign(runtimeFailure[running.id]!, { state: "failed", result: "exit-code", exitCode: 1, logs: "Backend runtime failure\n" });
+    writeFileSync(stateFile, JSON.stringify(runtimeFailure));
+    const failedLogs = await client.callTool({ name: "server_logs", arguments: { group: "my-group", service: "good" } });
+    assert.equal(failedLogs.isError, true);
+    assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.state, "failed");
+    assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.exitCode, 1);
+    assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.logs, "Backend runtime failure\n");
     const failedStop = await client.callTool({ name: "stop_server", arguments: { group: "my-group", service: "cleanup" } });
     assert.equal(failedStop.isError, true);
     assert.equal((failedStop.structuredContent?.services as Service[])[0]?.state, "failed");
