@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.3](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.2...v2.2.3) (2026-10-22)
+
+
+### Bug Fixes
+
+* **config:** Prefer group config for prepareCommand when present; fall back to checkout config otherwise. ([145ed39](https://github.com/mvagnon/zapdev-mcp/commit/145ed39bba731ff09351d9258272887528a3d2cd))
+
 ## [2.2.2](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.1...v2.2.2) (2026-10-22)
 
 
