@@ -7,11 +7,11 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-test("get_repo uses flat checkout names and optional safe group directories", async () => {
+test("prepare_repo uses flat checkout names and optional safe group directories", async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-test-")));
   const root = join(directory, "repos");
   const source = join(directory, "source");
-  const client = new Client({ name: "get-repo-test", version: "1.0.0" });
+  const client = new Client({ name: "prepare-repo-test", version: "1.0.0" });
   try {
     execFileSync("git", ["init", "--quiet", "--initial-branch=main", source]);
     writeFileSync(join(source, "AGENTS.md"), "Repository instructions");
@@ -37,13 +37,12 @@ test("get_repo uses flat checkout names and optional safe group directories", as
       const expected = join(root, ...(group ? [group] : []), "owner-repo");
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = await client.callTool({
-          name: "get_repo",
+          name: "prepare_repo",
           arguments: { repo: "Owner/Repo.git", ...(group && { group }) },
         });
         assert.notEqual(result.isError, true, JSON.stringify(result.content));
         assert.deepEqual(result.structuredContent, {
           path: expected,
-          agents_md: "Repository instructions",
         });
         assert.ok(existsSync(join(expected, ".git")));
         assert.equal(existsSync(join(root, ...(group ? [group] : []), "owner")), false);
@@ -67,7 +66,7 @@ test("get_repo uses flat checkout names and optional safe group directories", as
       const expected = join(root, ...(group ? [group] : []), "owner-repo");
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = await client.callTool({
-          name: "get_repo",
+          name: "prepare_repo",
           arguments: { repo: "owner/repo", ...(group && { group }) },
         });
         assert.notEqual(result.isError, true, JSON.stringify(result.content));
@@ -100,7 +99,7 @@ test("get_repo uses flat checkout names and optional safe group directories", as
     rmSync(groupConfig);
     symlinkSync(outside, groupConfig);
     const unsafeDestination = await client.callTool({
-      name: "get_repo", arguments: { repo: "owner/repo", group: "my-group" },
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.equal(unsafeDestination.isError, true);
     assert.equal(readFileSync(outside, "utf8"), "untouched");
@@ -109,14 +108,14 @@ test("get_repo uses flat checkout names and optional safe group directories", as
     mkdirSync(join(repoSecrets, ".git"));
     writeFileSync(join(repoSecrets, ".git", "config"), "invalid git config");
     const unsafeMetadata = await client.callTool({
-      name: "get_repo", arguments: { repo: "owner/repo", group: "my-group" },
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.equal(unsafeMetadata.isError, true);
     execFileSync("git", ["-C", join(root, "my-group", "owner-repo"), "rev-parse", "HEAD"]);
 
     for (const group of ["", ".", "..", "../outside", "/absolute", "nested/group", "nested\\group", "bad\0name"]) {
       const result = await client.callTool({
-        name: "get_repo",
+        name: "prepare_repo",
         arguments: { repo: "owner/repo", group },
       });
       assert.equal(result.isError, true, `Expected rejection for ${JSON.stringify(group)}`);
@@ -124,11 +123,115 @@ test("get_repo uses flat checkout names and optional safe group directories", as
 
     symlinkSync(source, join(root, "linked-group"));
     const result = await client.callTool({
-      name: "get_repo",
+      name: "prepare_repo",
       arguments: { repo: "owner/repo", group: "linked-group" },
     });
     assert.equal(result.isError, true);
     assert.equal(existsSync(join(source, "owner-repo")), false);
+  } finally {
+    await client.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("server tools apply parent configuration and instructions without refreshing repositories", async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-test-")));
+  const root = join(directory, "repos");
+  const group = join(root, "my-group");
+  const first = join(group, "owner-first");
+  const second = join(group, "owner-second");
+  const config = join(directory, ".zapdev", "config", "my-group");
+  const client = new Client({ name: "server-test", version: "1.0.0" });
+  try {
+    for (const path of [first, second]) {
+      execFileSync("git", ["init", "--quiet", path]);
+      writeFileSync(join(path, "AGENTS.md"), `Instructions for ${path}`);
+    }
+    mkdirSync(join(group, "not-a-repository"));
+    mkdirSync(join(config, "owner-first"), { recursive: true });
+    mkdirSync(join(config, "owner-second"));
+    writeFileSync(join(group, "AGENTS.md"), "Parent instructions take priority");
+    const parentConfig = join(config, "zapdev.json");
+    writeFileSync(parentConfig, JSON.stringify({
+      frontUrl: "http://localhost:3000",
+      startCommand: "printf parent > started",
+      stopCommand: "printf parent > stopped",
+    }));
+    writeFileSync(join(config, "owner-first", "zapdev.json"), JSON.stringify({
+      frontUrl: "http://localhost:3001",
+      apiUrl: "http://localhost:4000",
+      startCommand: "printf child > started",
+      stopCommand: "printf child > stopped",
+    }));
+    writeFileSync(join(config, "owner-second", "zapdev.json"), JSON.stringify({
+      dbUrl: "postgresql://localhost:5432/app",
+      startCommand: "printf child > started",
+    }));
+    await client.connect(new StdioClientTransport({
+      command: process.execPath,
+      args: ["--import", "tsx", "index.ts"],
+      env: { PATH: process.env.PATH ?? "", HOME: directory, ZD_REPOS_DIR: root },
+    }));
+
+    const started = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
+    assert.notEqual(started.isError, true, JSON.stringify(started.content));
+    const output = started.structuredContent as {
+      path: string; agents_md: string; frontUrl: string;
+      repositories: Array<{ path: string; agents_md: string; frontUrl: string; apiUrl?: string; dbUrl?: string }>;
+      commands: Array<{ path: string; pid: number }>;
+    };
+    assert.equal(output.path, group);
+    assert.equal(output.agents_md, "Parent instructions take priority");
+    assert.equal(output.frontUrl, "http://localhost:3000");
+    assert.deepEqual(output.repositories, [
+      { path: first, agents_md: `Instructions for ${first}`, frontUrl: "http://localhost:3000", apiUrl: "http://localhost:4000" },
+      { path: second, agents_md: `Instructions for ${second}`, frontUrl: "http://localhost:3000", dbUrl: "postgresql://localhost:5432/app" },
+    ]);
+    assert.equal(output.commands.length, 1);
+    assert.equal(output.commands[0]?.path, group);
+    assert.equal(typeof output.commands[0]?.pid, "number");
+    assert.equal(existsSync(join(first, "started")), false);
+    assert.equal(existsSync(join(second, "started")), false);
+
+    const stopped = await client.callTool({ name: "stop_server", arguments: { repo: "owner/first", group: "my-group" } });
+    assert.notEqual(stopped.isError, true, JSON.stringify(stopped.content));
+    assert.equal(readFileSync(join(group, "stopped"), "utf8"), "parent");
+    assert.equal(existsSync(join(first, "stopped")), false);
+
+    writeFileSync(parentConfig, "{}");
+    const children = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
+    assert.notEqual(children.isError, true, JSON.stringify(children.content));
+    const childCommands = (children.structuredContent as typeof output).commands;
+    assert.deepEqual(childCommands.map(({ path }) => path), [first, second]);
+    const stoppedChild = await client.callTool({ name: "stop_server", arguments: { repo: "owner/first", group: "my-group" } });
+    assert.notEqual(stoppedChild.isError, true);
+    assert.equal(readFileSync(join(first, "stopped"), "utf8"), "child");
+
+    rmSync(join(config, "owner-first", "zapdev.json"));
+    const single = await client.callTool({ name: "start_server", arguments: { repo: "Owner/First.git", group: "my-group" } });
+    assert.notEqual(single.isError, true);
+    assert.deepEqual(single.structuredContent, {
+      path: first, agents_md: `Instructions for ${first}`,
+      parent: { path: group, agents_md: "Parent instructions take priority" },
+    });
+    const noStop = await client.callTool({ name: "stop_server", arguments: { repo: "owner/first", group: "my-group" } });
+    assert.deepEqual(noStop.structuredContent, { path: first });
+
+    execFileSync("git", ["init", "--quiet", join(root, "owner-alone")]);
+    const alone = await client.callTool({ name: "start_server", arguments: { repo: "owner/alone" } });
+    assert.deepEqual(alone.structuredContent, { path: join(root, "owner-alone") });
+
+    for (const args of [{}, { group: "../outside" }, { repo: "owner/missing" }, { group: "not-found" }]) {
+      assert.equal((await client.callTool({ name: "start_server", arguments: args })).isError, true);
+    }
+    writeFileSync(parentConfig, '{"startCommand":42}');
+    assert.equal((await client.callTool({ name: "start_server", arguments: { group: "my-group" } })).isError, true);
+    writeFileSync(parentConfig, "invalid JSON");
+    assert.equal((await client.callTool({ name: "start_server", arguments: { group: "my-group" } })).isError, true);
+    rmSync(parentConfig);
+    symlinkSync(join(group, "AGENTS.md"), parentConfig);
+    assert.equal((await client.callTool({ name: "start_server", arguments: { group: "my-group" } })).isError, true);
+    assert.equal((await client.callTool({ name: "stop_server", arguments: { group: "my-group" } })).isError, true);
   } finally {
     await client.close();
     rmSync(directory, { recursive: true, force: true });

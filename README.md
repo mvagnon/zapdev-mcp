@@ -12,8 +12,9 @@
 **zapdev-mcp** is a lightweight TypeScript MCP server that brings
 [zapdev](https://github.com/mvagnon/zapdev) Git workflows to your AI assistant.
 
-It prepares disposable GitHub checkouts, generates Conventional Commits, and
-creates pull requests through three tools exposed over stdio. Commit and PR
+It prepares disposable GitHub checkouts, starts and stops development servers,
+generates Conventional Commits, and creates pull requests through five tools
+exposed over stdio. Commit and PR
 commands run through `npx --yes zapdev`; no global zapdev installation is needed.
 
 ## Project Architecture
@@ -21,7 +22,9 @@ commands run through `npx --yes zapdev`; no global zapdev installation is needed
 ```mermaid
 flowchart LR
   Client["MCP client"] -->|stdio| Server["index.ts"]
-  Server --> Repos["get_repo"]
+  Server --> Repos["prepare_repo"]
+  Server --> Servers["start_server / stop_server"]
+  Servers --> Config["~/.zapdev/config"]
   Server --> Commands["commit / pr"]
   Repos --> Git["Git / GitHub"]
   Commands --> CLI["npx --yes zapdev"]
@@ -29,7 +32,9 @@ flowchart LR
 ```
 
 - `index.ts`: MCP server, input validation, repository management, and CLI calls.
-- `index.test.ts`: commit and PR input validation and command invocation checks.
+- `repositories.ts`: shared repository paths and input validation.
+- `servers.ts`: server configuration, lifecycle commands, and startup context.
+- `index.test.ts`: repository, server lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
 
 ## Environment Variables
@@ -112,7 +117,7 @@ To use a local build, run `npm run build`, then configure your MCP client with
 
 ## Usage
 
-### `get_repo`
+### `prepare_repo`
 
 Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>-<repo>`.
 
@@ -130,8 +135,9 @@ moved or deleted.
 | `group`  | No       | Group folder under the repositories root; a single name, not a path |
 | `branch` | No       | Remote branch to check out; defaults to the remote's default branch |
 
-Returns the absolute checkout `path` and `agents_md` containing the root
-`AGENTS.md` when present. Use the returned path for subsequent tools.
+Returns only the absolute checkout `path`. Use `start_server` to retrieve
+`AGENTS.md` instructions and configured URLs. This replaces `get_repo`;
+clients using the old tool name must switch to `prepare_repo`.
 
 After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secrets`:
 
@@ -156,6 +162,93 @@ Git to prevent accidental commits; this tool does not add ignore rules.
 branch, overwrites tracked changes, and removes untracked files and directories
 except ignored files. Never use this tool for a checkout containing work you
 want to keep. Git authentication must work without interactive prompts.
+
+### Server configuration: `zapdev.json`
+
+Store configuration under `~/.zapdev/config`, following the same group/repository
+layout as secrets. These files are read directly, not copied or symlinked into
+checkouts. `ZD_REPOS_DIR` changes checkout locations, not configuration locations.
+
+| Configuration path | Applies to |
+| ------------------ | ---------- |
+| `~/.zapdev/config/owner-repo/zapdev.json` | Standalone repository |
+| `~/.zapdev/config/my-group/zapdev.json` | Group (parent) |
+| `~/.zapdev/config/my-group/owner-repo/zapdev.json` | Repository inside a group |
+
+Copy this template to the applicable location and adapt the commands and URLs:
+
+```json
+{
+  "startCommand": "docker compose up",
+  "stopCommand": "docker compose down",
+  "frontUrl": "http://localhost:3000",
+  "apiUrl": "http://localhost:4000",
+  "dbUrl": "postgresql://localhost:5432/app"
+}
+```
+
+All five fields are optional; `{}` is valid. Missing files are treated as empty
+configuration. Omitted commands do not run; omitted URLs are absent from context.
+Commands must be nonempty strings; URLs must be valid absolute URLs, including
+database schemes. Malformed files and source symlinks are rejected. Unknown fields
+are ignored to allow future additions.
+
+Commands execute through `/bin/sh` in the corresponding checkout or group directory
+with the MCP server's environment. Only configure trusted commands: they run with
+your host permissions. Replace the Docker Compose commands with a matching pair
+for your project if needed. A start command may itself launch multiple services;
+stop commands must handle their shutdown.
+
+The parent takes priority **per field**:
+
+- A group's `startCommand` runs **once**, replacing all selected child start
+  commands. Without it, each selected child's start command runs in its checkout.
+- A group's `stopCommand` replaces the selected child's stop command and runs
+  in the group directory. It may therefore stop the entire group.
+- Each parent URL overrides the corresponding child URL. Other child URLs remain
+  available. Grouped repositories do not inherit standalone configuration.
+- Group `AGENTS.md` instructions take priority over repository instructions;
+  both files are returned separately when starting a whole group.
+
+### `start_server`
+
+Start a prepared repository or group and return its context. Does not clone,
+refresh, or reset repositories; call `prepare_repo` first for each repository.
+
+| Argument | Required | Description |
+| -------- | -------- | ----------- |
+| `repo` | Unless `group` is supplied | GitHub repository as `owner/repo` |
+| `group` | Unless `repo` is supplied | Group name; combine with `repo` to select one grouped repository |
+
+Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
+`{"repo":"owner/repo","group":"my-group"}`.
+
+Returns `path`, root `agents_md` when present, and configured `frontUrl`, `apiUrl`,
+and `dbUrl`. A group also returns `repositories`, one entry per immediate child Git
+checkout, with its path, root instructions, and effective URLs after parent
+overrides. Other directories and symlinks are ignored. A single grouped repository
+also includes a `parent` entry with the group's path, instructions, and URLs.
+
+Configured commands run in the background with output discarded so development
+servers do not block the MCP call or corrupt stdio. `commands` lists launch paths
+and shell PIDs when commands were launched. This confirms process launch, **not
+server readiness**; verify the relevant URL before using it. No automatic port
+discovery, health checks, or duplicate-start protection is performed. Commands
+can partially succeed before an error; do not retry blindly.
+
+### `stop_server`
+
+Run the configured stop command for a prepared repository.
+
+| Argument | Required | Description |
+| -------- | -------- | ----------- |
+| `repo` | Yes | GitHub repository as `owner/repo` |
+| `group` | No | Group containing the repository |
+
+Waits for the command to finish (up to 180 seconds). Returns the repository `path`
+and command `stdout` / `stderr`; without a command, returns only `path`. Processes
+are not automatically killed using the startup PIDs. Configure `stopCommand` to
+stop the services started by `startCommand`. Do not retry blindly after errors.
 
 ### `commit`
 

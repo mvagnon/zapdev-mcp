@@ -4,7 +4,6 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
@@ -20,6 +19,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ensureDirectory, groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
+import { registerServerTools } from "./servers.js";
 
 const exec = promisify(execFile);
 const home = homedir();
@@ -31,14 +32,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
     timeout: 180_000,
   });
   return stdout.trim();
-}
-
-function ensureDirectory(path: string): void {
-  const entry = lstatSync(path, { throwIfNoEntry: false });
-  if (entry && !entry.isDirectory()) {
-    throw new Error(`Refusing to use a non-directory or symlink: ${path}`);
-  }
-  mkdirSync(path, { recursive: true });
 }
 
 function linkSecrets(source: string, destination: string, recursive: boolean): void {
@@ -65,7 +58,7 @@ function linkSecrets(source: string, destination: string, recursive: boolean): v
       if (target && !target.isFile()) {
         throw new Error(`Refusing to overwrite a non-file or symlink: ${to}`);
       }
-      const temporary = mkdtempSync(join(destination, ".get-repo-secret-"));
+      const temporary = mkdtempSync(join(destination, ".prepare-repo-secret-"));
       try {
         const file = join(temporary, "secret");
         symlinkSync(from, file);
@@ -120,7 +113,7 @@ const repositoryPath = z
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
 server.registerTool(
-  "get_repo",
+  "prepare_repo",
   {
     description:
       "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>-<repo> " +
@@ -129,27 +122,14 @@ server.registerTool(
       "Links matching files from ~/.zapdev/secrets into the group root and repository after refresh. " +
       "Secret symlinks replace matching files; keep them Git-ignored to avoid committing them. " +
       "Edits through these links modify the source secrets. " +
-      "Returns its absolute path and root AGENTS.md contents when present. " +
+      "Returns only its absolute path; use start_server for AGENTS.md instructions and configured URLs. " +
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
       "Never use for repositories containing work you want to keep.",
     inputSchema: z
       .object({
-        repo: z
-          .string()
-          .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/)
-          .transform((value) => value.replace(/\.git$/, "").toLowerCase())
-          .refine(
-            (value) =>
-              !["", ".", ".."].includes(value.slice(value.indexOf("/") + 1)),
-          )
-          .describe("GitHub repository as owner/repo."),
-        group: z
-          .string()
-          .regex(/^[^/\\\0]+$/)
-          .refine((value) => ![".", ".."].includes(value))
-          .optional()
-          .describe("Optional group folder inside ZD_REPOS_DIR; a single directory name, not a path."),
+        repo: repoSchema,
+        group: groupSchema,
         branch: z
           .string()
           .optional()
@@ -163,10 +143,7 @@ server.registerTool(
       if (branch) await git(home, "check-ref-format", "--branch", branch);
       const owner = repo.slice(0, repo.indexOf("/"));
       const name = repo.slice(repo.indexOf("/") + 1);
-      const root = process.env.ZD_REPOS_DIR || join(home, ".zapdev", "repos");
-      if (!isAbsolute(root)) {
-        throw new Error("ZD_REPOS_DIR must be an absolute path.");
-      }
+      const root = repositoryRoot();
       const parent = group === undefined ? root : join(root, group);
       const checkoutName = `${owner}-${name}`;
       const path = join(parent, checkoutName);
@@ -223,7 +200,7 @@ server.registerTool(
             "+refs/heads/*:refs/remotes/origin/*",
           );
         } else {
-          const temporary = mkdtempSync(join(parent, ".get-repo-"));
+          const temporary = mkdtempSync(join(parent, ".prepare-repo-"));
           try {
             await git(
               parent,
@@ -263,11 +240,7 @@ server.registerTool(
         );
         await git(path, "clean", "--quiet", "-fd");
 
-        const output: { path: string; agents_md?: string } = { path };
-        const instructions = join(path, "AGENTS.md");
-        if (lstatSync(instructions, { throwIfNoEntry: false })?.isFile()) {
-          output.agents_md = readFileSync(instructions, "utf8");
-        }
+        const output = { path };
         const secrets = join(home, ".zapdev", "secrets");
         const secretsDirectory = lstatSync(secrets, { throwIfNoEntry: false });
         if (secretsDirectory) {
@@ -296,6 +269,8 @@ server.registerTool(
     }
   },
 );
+
+registerServerTools(server);
 
 server.registerTool(
   "commit",
