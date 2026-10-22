@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/mvagnon/zapdev-mcp/compare/v1.5.0...v1.5.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **index.ts:** Link secrets directly by removing temporary directory usage in helper ([8b06280](https://github.com/mvagnon/zapdev-mcp/commit/8b0628045da87ebbf587fa2fad12396e0b02dbcc))
+
 ## [1.5.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.4.0...v1.5.0) (2026-10-22)
 
 
