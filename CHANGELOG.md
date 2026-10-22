@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/mvagnon/zapdev-mcp/compare/v1.2.0...v1.2.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **get_repo:** Checkout GitHub repos into an optional group directory using owner-repo naming. ([dabaaca](https://github.com/mvagnon/zapdev-mcp/commit/dabaaca3ad03e2f13de2f3df70653b43f24d6385))
+
 ## [1.2.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.1.0...v1.2.0) (2026-10-21)
 
 
