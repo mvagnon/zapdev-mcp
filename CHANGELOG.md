@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.1.1...v2.2.0) (2026-10-22)
+
+
+### Features
+
+* **server_logs:** Read timestamped logs from the latest invocation of the user unit. ([6d450a7](https://github.com/mvagnon/zapdev-mcp/commit/6d450a7847c6fae411b3a545d3d7235a8ae8ab52))
+
 ## [2.1.1](https://github.com/mvagnon/zapdev-mcp/compare/v2.1.0...v2.1.1) (2026-10-22)
 
 
