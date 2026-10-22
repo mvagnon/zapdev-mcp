@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.5.1...v1.6.0) (2026-10-22)
+
+
+### Features
+
+* **server:** Switch startCommand to an array and improve server startup handling. ([14dc1b4](https://github.com/mvagnon/zapdev-mcp/commit/14dc1b487f9fcc40ea31172e4fd56cfb8c027c14))
+
 ## [1.5.1](https://github.com/mvagnon/zapdev-mcp/compare/v1.5.0...v1.5.1) (2026-10-22)
 
 
