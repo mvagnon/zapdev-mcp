@@ -202,27 +202,20 @@ The parent takes priority **per field**:
 
 ### `start_server`
 
-Start a prepared repository or group and return its context. Does not clone or
-reset repositories; call `prepare_repo` first for each repository.
+Start a prepared repository or group and return its context. Does not clone,
+fetch, pull, switch branches, or reset repositories; call `prepare_repo` first
+for each repository.
 
 | Argument | Required                   | Description                                                      |
 | -------- | -------------------------- | ---------------------------------------------------------------- |
 | `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
 | `group`  | Unless `repo` is supplied  | Group name; combine with `repo` to select one grouped repository |
-| `branch` | No                         | Branch to switch to or create; defaults to each current branch   |
 
 Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
 `{"repo":"owner/repo","group":"my-group"}`.
 
-Before starting any command, fetches `origin` when configured and switches each
-selected repository to `branch` if supplied. Existing remote branches are tracked;
-otherwise a new local branch is created from the current HEAD without an upstream.
-Existing branches without an upstream track the matching `origin` branch when
-available. Runs `git pull --ff-only` when an upstream exists; otherwise skips pull.
-A group-wide start applies `branch` to every immediate child checkout, even when
-commands run in the parent. Context is read after Git updates. Local changes are
-not discarded. A Git failure prevents all launches, but previous Git updates are
-not rolled back.
+The `branch` argument is no longer accepted. Use `prepare_repo` to select an
+existing remote branch, or `commit` to switch to or create a local branch.
 
 Returns `path`, root `agents_md` when present, and configured `frontUrl`, `apiUrl`,
 and `dbUrl`. A group also returns `repositories`, one entry per immediate child Git
@@ -245,12 +238,13 @@ Commit changes in a local Git repository using zapdev without interactive review
 | Argument | Required | Description                                                                    |
 | -------- | -------- | ------------------------------------------------------------------------------ |
 | `path`   | Yes      | Absolute path inside the local Git repository                                  |
-| `branch` | Yes      | Local branch to switch to or create before committing                          |
+| `branch` | No       | Local branch to switch to or create; defaults to the current branch             |
 | `type`   | No       | Conventional Commit type; defaults to `auto`; append `!` for a breaking change |
 
-Runs `zapdev commit --yes --pull --no-push --branch=<branch>`, adding `--type`
-when a non-automatic type is supplied. Pulls fast-forward updates when an upstream
-is configured, commits changes, and never pushes.
+Runs `zapdev commit --yes --pull --no-push`, adding `--branch=<branch>` when
+supplied and `--type` when a non-automatic type is supplied. Without `branch`,
+commits on the current branch. Pulls fast-forward updates when an upstream is
+configured, commits changes, and never pushes.
 
 Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`,
 `perf`, `test`, `build`, `ci`, `revert`. Explicit types can include `!`, such as `feat!`.

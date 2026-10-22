@@ -182,7 +182,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
   }
 });
 
-test("start_server applies command arrays, parent context, and branch updates before launching", async () => {
+test("start_server applies command arrays and parent context without updating repositories", async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-test-")));
   const root = join(directory, "repos");
   const group = join(root, "my-group");
@@ -265,63 +265,31 @@ test("start_server applies command arrays, parent context, and branch updates be
     const alone = await client.callTool({ name: "start_server", arguments: { repo: "owner/alone" } });
     assert.deepEqual(alone.structuredContent, { path: join(root, "owner-alone") });
 
-    execFileSync("git", ["-C", source, "switch", "--quiet", "-c", "feature/remote"]);
-    writeFileSync(join(source, "AGENTS.md"), "Remote branch instructions");
-    execFileSync("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-      "commit", "--quiet", "-am", "Remote branch"]);
-    const remote = await client.callTool({
-      name: "start_server", arguments: { group: "my-group", branch: "feature/remote" },
-    });
-    assert.notEqual(remote.isError, true, JSON.stringify(remote.content));
-    assert.ok((remote.structuredContent as typeof output).repositories.every(({ agents_md }) => agents_md === "Remote branch instructions"));
-    for (const path of [first, second]) {
-      assert.equal(execFileSync("git", ["-C", path, "branch", "--show-current"], { encoding: "utf8" }).trim(), "feature/remote");
-      assert.equal(execFileSync("git", ["-C", path, "rev-parse", "--abbrev-ref", "@{upstream}"], { encoding: "utf8" }).trim(), "origin/feature/remote");
-    }
+    const localHead = execFileSync("git", ["-C", first, "rev-parse", "HEAD"], { encoding: "utf8" });
     writeFileSync(join(source, "AGENTS.md"), "Updated instructions");
     execFileSync("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
       "commit", "--quiet", "-am", "Update instructions"]);
-    const pulled = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
-    assert.notEqual(pulled.isError, true, JSON.stringify(pulled.content));
-    assert.ok((pulled.structuredContent as typeof output).repositories.every(({ agents_md }) => agents_md === "Updated instructions"));
-    const created = await client.callTool({
-      name: "start_server", arguments: { group: "my-group", branch: "feature/new" },
-    });
-    assert.notEqual(created.isError, true, JSON.stringify(created.content));
+    const unchanged = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
+    assert.notEqual(unchanged.isError, true, JSON.stringify(unchanged.content));
+    assert.ok((unchanged.structuredContent as typeof output).repositories.every(({ agents_md }) => agents_md === "Repository instructions"));
     for (const path of [first, second]) {
-      assert.equal(execFileSync("git", ["-C", path, "branch", "--show-current"], { encoding: "utf8" }).trim(), "feature/new");
-      assert.equal(execFileSync("git", ["-C", path, "for-each-ref", "--format=%(upstream)", "refs/heads/feature/new"], { encoding: "utf8" }).trim(), "");
+      assert.equal(execFileSync("git", ["-C", path, "rev-parse", "HEAD"], { encoding: "utf8" }), localHead);
+      assert.equal(execFileSync("git", ["-C", path, "rev-parse", "origin/main"], { encoding: "utf8" }), localHead);
     }
-    const existing = await client.callTool({
-      name: "start_server", arguments: { repo: "owner/first", group: "my-group", branch: "main" },
-    });
-    assert.notEqual(existing.isError, true, JSON.stringify(existing.content));
-    assert.equal(execFileSync("git", ["-C", first, "branch", "--show-current"], { encoding: "utf8" }).trim(), "main");
-    assert.equal(execFileSync("git", ["-C", second, "branch", "--show-current"], { encoding: "utf8" }).trim(), "feature/new");
-
-    execFileSync("git", ["-C", source, "switch", "--quiet", "main"]);
-    writeFileSync(join(source, "AGENTS.md"), "Updated main instructions");
-    execFileSync("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-      "commit", "--quiet", "-am", "Update main"]);
+    execFileSync("git", ["-C", first, "switch", "--quiet", "-c", "feature/local"]);
+    execFileSync("git", ["-C", first, "remote", "set-url", "origin", join(directory, "missing-remote")]);
     writeFileSync(join(first, "AGENTS.md"), "Local edits to preserve");
     const dirty = await client.callTool({
       name: "start_server", arguments: { repo: "owner/first", group: "my-group" },
     });
-    assert.equal(dirty.isError, true);
+    assert.notEqual(dirty.isError, true, JSON.stringify(dirty.content));
+    assert.equal(dirty.structuredContent?.agents_md, "Local edits to preserve");
     assert.equal(readFileSync(join(first, "AGENTS.md"), "utf8"), "Local edits to preserve");
-    writeFileSync(join(first, "AGENTS.md"), "Repository instructions");
-    execFileSync("git", ["-C", first, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-      "commit", "--quiet", "--allow-empty", "-m", "Local commit"]);
-    const localHead = execFileSync("git", ["-C", first, "rev-parse", "HEAD"], { encoding: "utf8" });
-    const divergent = await client.callTool({
-      name: "start_server", arguments: { repo: "owner/first", group: "my-group" },
-    });
-    assert.equal(divergent.isError, true);
+    assert.equal(execFileSync("git", ["-C", first, "branch", "--show-current"], { encoding: "utf8" }).trim(), "feature/local");
     assert.equal(execFileSync("git", ["-C", first, "rev-parse", "HEAD"], { encoding: "utf8" }), localHead);
 
     for (const args of [{}, { group: "../outside" }, { repo: "owner/missing" }, { group: "not-found" },
-      { group: "my-group", branch: "bad..branch" }, { group: "my-group", branch: "" },
-      { group: "my-group", branch: "@{-1}" }]) {
+      { group: "my-group", branch: "main" }]) {
       assert.equal((await client.callTool({ name: "start_server", arguments: args })).isError, true);
     }
     for (const startCommand of [42, "echo legacy", [""], ["  "], [42]]) {
@@ -329,7 +297,7 @@ test("start_server applies command arrays, parent context, and branch updates be
       assert.equal((await client.callTool({ name: "start_server", arguments: { group: "my-group" } })).isError, true);
     }
     writeFileSync(parentConfig, JSON.stringify({ startCommand: [] }));
-    const empty = await client.callTool({ name: "start_server", arguments: { group: "my-group", branch: "feature/new" } });
+    const empty = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
     assert.notEqual(empty.isError, true, JSON.stringify(empty.content));
     assert.equal(empty.structuredContent?.commands, undefined);
     writeFileSync(parentConfig, "invalid JSON");
@@ -366,10 +334,15 @@ console.error("scan warning");
       env: { PATH: `${directory}:${process.env.PATH}` },
     }));
 
-    for (const type of [undefined, "auto", "fix!"]) {
+    for (const { type, branch } of [
+      { type: undefined, branch: undefined },
+      { type: "auto", branch: "feat/example" },
+      { type: "fix!", branch: undefined },
+      { type: "fix!", branch: "feat/example" },
+    ]) {
       const result = await client.callTool({
         name: "commit",
-        arguments: { path: directory, branch: "feat/example", ...(type && { type }) },
+        arguments: { path: directory, ...(branch && { branch }), ...(type && { type }) },
       });
       assert.notEqual(result.isError, true);
       const output = result.structuredContent as { stdout: string; stderr: string };
@@ -377,7 +350,7 @@ console.error("scan warning");
         args: [
           "--yes", "zapdev", "commit", "--yes", "--pull", "--no-push",
           ...(type === "fix!" ? ["--type=fix!"] : []),
-          "--branch=feat/example",
+          ...(branch ? [`--branch=${branch}`] : []),
         ],
         cwd: realpathSync(directory),
       });
@@ -386,6 +359,7 @@ console.error("scan warning");
 
     for (const input of [
       { branch: "bad..branch" },
+      { branch: "" },
       { type: "invalid" },
       { branch: "fail" },
     ]) {

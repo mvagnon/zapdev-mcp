@@ -272,7 +272,7 @@ server.registerTool(
   {
     description:
       "Commit all changes in a local Git repository using npx --yes zapdev. " +
-      "Always uses --yes --pull --no-push and the supplied --branch. " +
+      "Always uses --yes --pull --no-push; adds --branch when supplied, otherwise keeps the current branch. " +
       "Pulls fast-forward updates when an upstream is configured; never pushes. " +
       "Sends commit context to the configured zapdev LLM endpoint. " +
       "Requires npx and ZD_* environment configuration; no global zapdev installation needed.",
@@ -282,7 +282,8 @@ server.registerTool(
         branch: z
           .string()
           .min(1)
-          .describe("Local branch to switch to or create before committing."),
+          .optional()
+          .describe("Local branch to switch to or create before committing; defaults to the current branch."),
         type: z
           .string()
           .regex(/^(auto|(?:feat|fix|deps|chore|docs|style|refactor|perf|test|build|ci|revert)!?)$/)
