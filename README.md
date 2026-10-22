@@ -76,7 +76,7 @@ servers. The following uses the common `mcpServers` format; adapt it to your cli
   "mcpServers": {
     "zapdev": {
       "command": "npx",
-      "args": ["--yes", "zapdev-mcp"],
+      "args": ["--yes", "zapdev-mcp@latest"],
       "env": {
         "ZD_URL": "http://localhost:1234/v1/chat/completions",
         "ZD_MODEL": "your-local-model-id",
@@ -93,28 +93,6 @@ private and do not commit them to your repository.
 
 The MCP client must make `git`, `npx`, and, for PRs, `gh` available on the server's
 `PATH`. The server runs on the client's host, not in an isolated sandbox.
-
-### Development Setup
-
-From a clone, using Node.js 22 as in CI:
-
-```bash
-npm ci
-```
-
-| Command              | Description                                          |
-| -------------------- | ---------------------------------------------------- |
-| `npm start`          | Run the source server with tsx over stdio            |
-| `npm run lint`       | Lint TypeScript, JavaScript, JSON, and Markdown      |
-| `npm run typecheck`  | Check TypeScript types                               |
-| `npm run knip`       | Check unused files, exports, and dependencies        |
-| `npm test`           | Run the existing Node.js tests                       |
-| `npm run staticchecks` | Run lint, typecheck, Knip, and tests, as in CI       |
-| `npm run build`      | Compile the executable to `dist/`                    |
-| `npm pack --dry-run` | Build and inspect the npm package without publishing |
-
-To use a local build, run `npm run build`, then configure your MCP client with
-`node` as the command and the absolute path to `dist/index.js` as its argument.
 
 ## Usage
 
@@ -149,11 +127,11 @@ and secret links are not rolled back. Without a command, nothing extra runs.
 
 After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secrets`:
 
-| Source under `~/.zapdev/secrets/` | Destination under `ZD_REPOS_DIR` |
-| ------------------------------- | -------------------------------- |
-| `my-group/config.json` | `my-group/config.json` |
-| `my-group/owner-repo/.env` | `my-group/owner-repo/.env` |
-| `owner-repo/.env.local` | `owner-repo/.env.local` (without `group`) |
+| Source under `~/.zapdev/secrets/` | Destination under `ZD_REPOS_DIR`          |
+| --------------------------------- | ----------------------------------------- |
+| `my-group/config.json`            | `my-group/config.json`                    |
+| `my-group/owner-repo/.env`        | `my-group/owner-repo/.env`                |
+| `owner-repo/.env.local`           | `owner-repo/.env.local` (without `group`) |
 
 Only files directly inside the group folder are linked into the group root.
 The selected repository's secrets include subdirectories; other repositories are
@@ -177,10 +155,10 @@ Store configuration under `~/.zapdev/config`, following the same group/repositor
 layout as secrets. These files are read directly, not copied or symlinked into
 checkouts. `ZD_REPOS_DIR` changes checkout locations, not configuration locations.
 
-| Configuration path | Applies to |
-| ------------------ | ---------- |
-| `~/.zapdev/config/owner-repo/zapdev.json` | Standalone repository |
-| `~/.zapdev/config/my-group/zapdev.json` | Group (parent) |
+| Configuration path                                 | Applies to                |
+| -------------------------------------------------- | ------------------------- |
+| `~/.zapdev/config/owner-repo/zapdev.json`          | Standalone repository     |
+| `~/.zapdev/config/my-group/zapdev.json`            | Group (parent)            |
 | `~/.zapdev/config/my-group/owner-repo/zapdev.json` | Repository inside a group |
 
 Copy this template to the applicable location and adapt the commands and URLs:
@@ -228,10 +206,10 @@ The parent takes priority **per field**:
 Start a prepared repository or group and return its context. Does not clone,
 refresh, or reset repositories; call `prepare_repo` first for each repository.
 
-| Argument | Required | Description |
-| -------- | -------- | ----------- |
-| `repo` | Unless `group` is supplied | GitHub repository as `owner/repo` |
-| `group` | Unless `repo` is supplied | Group name; combine with `repo` to select one grouped repository |
+| Argument | Required                   | Description                                                      |
+| -------- | -------------------------- | ---------------------------------------------------------------- |
+| `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
+| `group`  | Unless `repo` is supplied  | Group name; combine with `repo` to select one grouped repository |
 
 Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
 `{"repo":"owner/repo","group":"my-group"}`.
@@ -253,10 +231,10 @@ can partially succeed before an error; do not retry blindly.
 
 Run the configured stop command for a prepared repository.
 
-| Argument | Required | Description |
-| -------- | -------- | ----------- |
-| `repo` | Yes | GitHub repository as `owner/repo` |
-| `group` | No | Group containing the repository |
+| Argument | Required | Description                       |
+| -------- | -------- | --------------------------------- |
+| `repo`   | Yes      | GitHub repository as `owner/repo` |
+| `group`  | No       | Group containing the repository   |
 
 Waits for the command to finish (up to 180 seconds). Returns the repository `path`
 and command `stdout` / `stderr`; without a command, returns only `path`. Processes

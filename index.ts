@@ -3,11 +3,9 @@ import { execFile } from "node:child_process";
 import {
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readlinkSync,
   realpathSync,
-  renameSync,
   rmdirSync,
   rmSync,
   symlinkSync,
@@ -59,14 +57,8 @@ function linkSecrets(source: string, destination: string, recursive: boolean): v
       if (target && !target.isFile()) {
         throw new Error(`Refusing to overwrite a non-file or symlink: ${to}`);
       }
-      const temporary = mkdtempSync(join(destination, ".prepare-repo-secret-"));
-      try {
-        const file = join(temporary, "secret");
-        symlinkSync(from, file);
-        renameSync(file, to);
-      } finally {
-        rmSync(temporary, { recursive: true, force: true });
-      }
+      if (target) rmSync(to);
+      symlinkSync(from, to);
     }
   }
 }
@@ -204,7 +196,7 @@ server.registerTool(
             "+refs/heads/*:refs/remotes/origin/*",
           );
         } else {
-          const temporary = mkdtempSync(join(parent, ".prepare-repo-"));
+          mkdirSync(path);
           try {
             await git(
               parent,
@@ -212,11 +204,11 @@ server.registerTool(
               "--quiet",
               "--filter=blob:none",
               `https://github.com/${repo}.git`,
-              temporary,
+              path,
             );
-            renameSync(temporary, path);
-          } finally {
-            rmSync(temporary, { recursive: true, force: true });
+          } catch (error) {
+            rmSync(path, { recursive: true, force: true });
+            throw error;
           }
         }
 
