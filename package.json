@@ -25,7 +25,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "knip": "knip",
-    "test": "node --import tsx --test index.test.ts",
+    "test": "node --import tsx --test *.test.ts",
     "staticchecks": "npm run lint && npm run typecheck && npm run knip && npm run test",
     "prepack": "npm run build"
   },

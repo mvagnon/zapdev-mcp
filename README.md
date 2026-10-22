@@ -12,8 +12,8 @@
 **zapdev-mcp** is a lightweight TypeScript MCP server that brings
 [zapdev](https://github.com/mvagnon/zapdev) Git workflows to your AI assistant.
 
-It prepares disposable GitHub checkouts, starts development servers,
-generates Conventional Commits, and creates pull requests through four tools
+It prepares disposable GitHub checkouts, manages named development services and their logs,
+generates Conventional Commits, and creates pull requests through six tools
 exposed over stdio. Commit and PR
 commands run through `npx --yes zapdev`; no global zapdev installation is needed.
 
@@ -23,8 +23,10 @@ commands run through `npx --yes zapdev`; no global zapdev installation is needed
 flowchart LR
   Client["MCP client"] -->|stdio| Server["index.ts"]
   Server --> Repos["prepare_repo"]
-  Server --> Servers["start_server"]
+  Server --> Servers["start_server / stop_server / server_logs"]
   Servers --> Config["~/.zapdev/config"]
+  Servers --> Systemd["systemd user services"]
+  Servers --> Logs["~/.zapdev/services/*.log"]
   Server --> Commands["commit / pr"]
   Repos --> Git["Git / GitHub"]
   Commands --> CLI["npx --yes zapdev"]
@@ -35,7 +37,8 @@ flowchart LR
 - `repositories.ts`: shared repository paths and input validation.
 - `config.ts`: shared repository and group configuration.
 - `servers.ts`: server configuration, lifecycle commands, and startup context.
-- `index.test.ts`: repository, server lifecycle, commit, and PR checks.
+- `service-manager.ts`: isolated systemd user units and bounded log access.
+- `index.test.ts` / `servers.test.ts`: repository, service lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
 
 ## Environment Variables
@@ -61,6 +64,8 @@ for local and OpenRouter examples.
 
 - **Node.js >= 20 and npm:** run the server and invoke zapdev through `npx`.
 - **Git:** clones repositories and performs Git operations.
+- **Linux with a running systemd user manager:** required for starting and stopping
+  configured services. Services run without sudo, independently of OpenCode's unit.
 - **GitHub authentication:** configure non-interactive Git credentials for private
   repositories; install GitHub CLI and run `gh auth login` for `pr`.
 - **LLM endpoint and model:** required for commit messages and PR titles.
@@ -166,7 +171,13 @@ Copy this template to the applicable location and adapt the commands and URLs:
 ```json
 {
   "prepareCommand": "docker compose pull",
-  "startCommand": ["docker compose up", "npm run dev"],
+  "services": {
+    "frontend": { "startCommand": "npm run dev" },
+    "backend": {
+      "startCommand": "docker compose up",
+      "stopCommand": "docker compose down"
+    }
+  },
   "frontUrl": "http://localhost:3000",
   "apiUrl": "http://localhost:4000",
   "dbUrl": "postgresql://localhost:5432/app"
@@ -175,17 +186,30 @@ Copy this template to the applicable location and adapt the commands and URLs:
 
 All five fields are optional; `{}` is valid. Missing files are treated as empty
 configuration. Omitted commands do not run; omitted URLs are absent from context.
-`prepareCommand` must be a nonempty string; `startCommand` must be an array of
-nonempty strings. An empty array disables startup commands, including child
-commands when configured on a group. URLs must be valid absolute URLs, including
-database schemes. Malformed files and source symlinks are rejected. Unknown fields
-are ignored to allow future additions.
+URLs must be valid absolute URLs, including database schemes. Malformed files,
+unknown fields, and source symlinks are rejected.
+
+| Field | Meaning |
+| ----- | ------- |
+| `prepareCommand` | Optional nonempty shell command executed by `prepare_repo` |
+| `services` | Optional object of named services; `{}` disables child services on a group |
+| `services.<name>.startCommand` | Required nonempty shell command for that service |
+| `services.<name>.stopCommand` | Optional nonempty shell command executed by systemd on shutdown |
+| `frontUrl`, `apiUrl`, `dbUrl` | Optional URLs returned in startup context |
+
+Service names contain 1–63 ASCII letters, digits, `_`, or `-`, beginning with a
+letter or digit. Names identify services in tool calls; unit IDs additionally
+include a hash of the absolute checkout/group path to avoid collisions.
 
 Commands execute through `/bin/sh` in the corresponding checkout or group directory
 with the MCP server's environment. Only configure trusted commands: they run with
-your host permissions. Each startup array entry launches its own detached process.
-**Breaking change:** replace string `startCommand` values with arrays.
-`stop_server` and `stopCommand` have been removed; manage shutdown externally.
+your host permissions. Systemd-specific invocation variables are not forwarded.
+`stopCommand` is registered as `ExecStop`: systemd can also run it on automatic
+shutdown after a process failure. Make cleanup commands safe to repeat.
+
+**Breaking change:** top-level `startCommand` arrays are no longer accepted.
+Replace them with `services`. Startup responses now contain `services`, not
+`commands` or PIDs. Configured service supervision requires Linux/systemd.
 
 The parent takes priority **per field**:
 
@@ -193,8 +217,11 @@ The parent takes priority **per field**:
   runs in the group directory, **once per `prepare_repo` call**, after that
   repository's Git preparation and secret linking. Other children might not yet
   be prepared. Without a parent command, the child's command runs in its checkout.
-- A group's `startCommand` array runs **once**, replacing all selected child start
-  arrays. Without it, each selected child's array runs in its checkout.
+- A group's `services` object replaces all selected child services, without merging
+  names, and runs in the group directory. Without it, each child's services run in
+  its checkout. A single grouped repository can therefore start or stop shared
+  group services. Stop services before renaming/removing their configuration or
+  changing this override, so their original units remain selectable.
 - Each parent URL overrides the corresponding child URL. Other child URLs remain
   available. Grouped repositories do not inherit standalone configuration.
 - Group `AGENTS.md` instructions take priority over repository instructions;
@@ -210,6 +237,7 @@ for each repository.
 | -------- | -------------------------- | ---------------------------------------------------------------- |
 | `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
 | `group`  | Unless `repo` is supplied  | Group name; combine with `repo` to select one grouped repository |
+| `service` | No                       | Configured service name; otherwise selects all services          |
 
 Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
 `{"repo":"owner/repo","group":"my-group"}`.
@@ -223,13 +251,57 @@ checkout, with its path, root instructions, and effective URLs after parent
 overrides. Other directories and symlinks are ignored. A single grouped repository
 also includes a `parent` entry with the group's path, instructions, and URLs.
 
-Configured commands run in the background with output discarded so development
-servers do not block the MCP call or corrupt stdio. `commands` lists launch paths
-and one shell PID per configured array entry when commands were launched, in array
-order. This confirms process launch, **not server readiness**; verify the relevant
-URL before using it. No automatic port
-discovery, health checks, or duplicate-start protection is performed. Commands
-can partially succeed before an error; do not retry blindly.
+Each service runs in a separate transient systemd user unit. Already active units
+are reused rather than duplicated, including across MCP/OpenCode restarts. A unit
+in a failed state is reported as an error; stop it before starting again. Commands
+and environment changes take effect on the next fresh start, not on reused units.
+Units are not configured to restart automatically or survive a machine reboot.
+Remaining logged in is normally required; enable user lingering separately if
+services should continue after logout.
+
+The response's `services` array contains `name`, `path`, stable unit `id`, systemd
+`state`/`subState`, `result`, and main-process `exitCode`. `active`/`running`
+confirms process startup, **not server readiness**; verify the relevant URL.
+Successful commands that exit are retained as `active`/`exited`, so a later
+`stop_server` can still run cleanup for externally managed services, such as
+`docker compose up -d`. Such services need an appropriate `stopCommand`.
+
+Partial successes remain in the response: an individual service can include
+`error`, and the overall MCP response is marked as an error if any service fails.
+No automatic port discovery or health checks are performed.
+
+### `stop_server`
+
+Accepts the same `repo`, `group`, and optional `service` as `start_server`.
+Runs the service's registered `stopCommand` first, then terminates all remaining
+processes in that unit with SIGTERM, escalating to SIGKILL if necessary. Both the
+cleanup command and subsequent process termination have a 30-second timeout.
+Without `stopCommand`, systemd directly handles termination. Already stopped or
+absent units are left alone; unrelated systemd services cannot be selected.
+
+Returns each service's final state/result, errors, and last 100 log lines. A failed
+cleanup is reported even if the application has stopped. Makes no Git changes.
+
+Example: `{"group":"my-group","service":"backend"}`.
+
+### `server_logs`
+
+Reads combined stdout/stderr from private files under `~/.zapdev/services`, not
+the journal. Logs remain available after service stops and MCP restarts.
+
+| Argument | Required | Description |
+| -------- | -------- | ----------- |
+| `repo` / `group` | At least one | Same selection and group overrides as startup |
+| `service` | No | Select a configured name; otherwise returns every selected service |
+| `lines` | No | Last lines per service; defaults to 100, maximum 1000 |
+
+Returns `services` with `name`, `path`, unit `id`, `logs`, and `truncated`. Each read
+is capped at the last 64 KiB, strips ANSI control sequences, and never streams.
+Missing log files return empty logs. Log files append across starts; configure
+external rotation if needed. Logs may contain application secrets; do not share
+them without review.
+
+Example: `{"repo":"owner/repo","service":"frontend","lines":50}`.
 
 ### `commit`
 
