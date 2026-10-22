@@ -131,8 +131,8 @@ export function registerServerTools(server: McpServer): void {
     description:
       "Stop named services in a prepared repository or group using systemd --user. " +
       "Uses the same parent overrides and optional service filter as start_server. " +
-      "Runs each service's optional stopCommand before terminating all remaining processes in its unit. " +
-      "Shutdown commands and process termination each have a 30-second systemd timeout. " +
+      "First sends SIGINT (Ctrl-C) to all processes in the unit, waiting up to 30 seconds before SIGKILL. " +
+      "Then runs the optional stopCommand as cleanup, with its own 30-second systemd timeout. " +
       "Already stopped services are unchanged. Returns final states, errors and bounded final logs. " +
       "Never operates on arbitrary PIDs or unrelated systemd units. Makes no Git changes.",
     inputSchema: selectionSchema,

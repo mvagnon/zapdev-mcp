@@ -90,10 +90,11 @@ async function start(service: Service, id: string, logFile: string, current: Sta
     await systemd("systemd-run", [
       "--quiet", `--unit=${id}`, "--service-type=exec", "--remain-after-exit",
       `--working-directory=${service.path}`, "--property=KillMode=control-group",
+      "--property=KillSignal=SIGINT",
       "--property=TimeoutStopSec=30s", `--property=StandardOutput=append:${logFile}`,
       `--property=StandardError=append:${logFile}`,
       ...(service.stopCommand === undefined ? [] : [
-        `--property=ExecStop=:/bin/sh -c ${JSON.stringify(service.stopCommand)}`,
+        `--property=ExecStopPost=:/bin/sh -c ${JSON.stringify(service.stopCommand)}`,
       ]),
       ...environment.map(name => `--setenv=${name}`),
       "/bin/sh", "-c", service.startCommand.replaceAll("$", () => "$$"),

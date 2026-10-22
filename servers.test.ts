@@ -106,10 +106,12 @@ if (failed) { console.error("Start failed"); process.exit(1); }
     const args = units()[service.id]!.args;
     assert.ok(args.includes("--user"));
     assert.ok(args.includes("--property=KillMode=control-group"));
+    assert.ok(args.includes("--property=KillSignal=SIGINT"));
     assert.ok(args.includes("--property=TimeoutStopSec=30s"));
     assert.ok(args.includes("--setenv=PATH"));
     assert.equal(args.at(-1), "printf 'hello $$HOME %s\\n'");
-    assert.ok(args.includes(`--property=ExecStop=:/bin/sh -c ${JSON.stringify("printf 'stop $HOME'")}`));
+    assert.ok(args.includes(`--property=ExecStopPost=:/bin/sh -c ${JSON.stringify("printf 'stop $HOME'")}`));
+    assert.ok(!args.some(arg => arg.startsWith("--property=ExecStop=")));
     const logArg = args.find(arg => arg.startsWith("--property=StandardOutput=append:"))!;
     const logPath = logArg.slice("--property=StandardOutput=append:".length);
     assert.ok(logPath.startsWith(join(directory, ".zapdev", "services")));
@@ -151,7 +153,8 @@ if (failed) { console.error("Start failed"); process.exit(1); }
     const childServices = children.structuredContent?.services as Service[];
     assert.deepEqual(childServices.map(({ path }) => path), [first, second]);
     assert.equal(new Set(childServices.map(({ id }) => id)).size, 2);
-    assert.ok(childServices.every(({ id }) => !units()[id]!.args.some(arg => arg.startsWith("--property=ExecStop="))));
+    assert.ok(childServices.every(({ id }) => units()[id]!.args.includes("--property=KillSignal=SIGINT")));
+    assert.ok(childServices.every(({ id }) => !units()[id]!.args.some(arg => arg.startsWith("--property=ExecStop"))));
     writeFileSync(parentConfig, JSON.stringify({ services: {} }));
     const empty = await client.callTool({ name: "start_server", arguments: { group: "my-group" } });
     assert.deepEqual(empty.structuredContent?.services, []);

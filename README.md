@@ -194,7 +194,7 @@ unknown fields, and source symlinks are rejected.
 | `prepareCommand` | Optional nonempty shell command executed by `prepare_repo` |
 | `services` | Optional object of named services; `{}` disables child services on a group |
 | `services.<name>.startCommand` | Required nonempty shell command for that service |
-| `services.<name>.stopCommand` | Optional nonempty shell command executed by systemd on shutdown |
+| `services.<name>.stopCommand` | Optional nonempty shell command executed after the service's processes stop |
 | `frontUrl`, `apiUrl`, `dbUrl` | Optional URLs returned in startup context |
 
 Service names contain 1–63 ASCII letters, digits, `_`, or `-`, beginning with a
@@ -204,8 +204,9 @@ include a hash of the absolute checkout/group path to avoid collisions.
 Commands execute through `/bin/sh` in the corresponding checkout or group directory
 with the MCP server's environment. Only configure trusted commands: they run with
 your host permissions. Systemd-specific invocation variables are not forwarded.
-`stopCommand` is registered as `ExecStop`: systemd can also run it on automatic
-shutdown after a process failure. Make cleanup commands safe to repeat.
+`stopCommand` is registered as `ExecStopPost`: systemd can also run it after a
+startup or runtime failure. Cleanup must tolerate partially initialized or already
+stopped services and be safe to repeat.
 
 **Breaking change:** top-level `startCommand` arrays are no longer accepted.
 Replace them with `services`. Startup responses now contain `services`, not
@@ -273,11 +274,16 @@ No automatic port discovery or health checks are performed.
 ### `stop_server`
 
 Accepts the same `repo`, `group`, and optional `service` as `start_server`.
-Runs the service's registered `stopCommand` first, then terminates all remaining
-processes in that unit with SIGTERM, escalating to SIGKILL if necessary. Both the
-cleanup command and subsequent process termination have a 30-second timeout.
-Without `stopCommand`, systemd directly handles termination. Already stopped or
-absent units are left alone; unrelated systemd services cannot be selected.
+First sends SIGINT (the signal used by Ctrl-C) to all processes in the unit and
+waits up to 30 seconds for them to exit. Remaining processes are forcibly stopped
+with SIGKILL before the optional `stopCommand` runs as cleanup. Cleanup has its
+own 30-second timeout. Without `stopCommand`, the sequence ends after process
+termination. Already stopped or absent units are left alone; unrelated systemd
+services cannot be selected.
+
+Existing units keep their original shutdown settings. After updating the MCP,
+stop and start services once to recreate their units with the new ordering; that
+first stop still follows the old ordering.
 
 Returns each service's final state/result, errors, and last 100 log lines. A failed
 cleanup is reported even if the application has stopped. Makes no Git changes.
