@@ -133,19 +133,40 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
         });
         assert.notEqual(result.isError, true, JSON.stringify(result.content));
         assert.deepEqual(result.structuredContent, { path });
-        assert.equal(readFileSync(join(path, "prepared"), "utf8"), group ? "child" : "standalone");
-        if (group) assert.equal(existsSync(join(parent, "prepared")), false);
+        assert.equal(readFileSync(join(group ? parent : path, "prepared"), "utf8"), group ? "parent" : "standalone");
+        if (group) assert.equal(existsSync(join(path, "prepared")), false);
       }
     }
 
-    writeFileSync(parentConfig, '{"frontUrl":"http://localhost:3000"}');
+    const groupPath = join(root, "my-group");
+    writeFileSync(childConfig, "invalid JSON");
+    for (const config of [{}, { services: {} }, { frontUrl: "http://localhost:3000" }]) {
+      writeFileSync(parentConfig, JSON.stringify(config));
+      const response = await client.callTool({
+        name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+      });
+      assert.notEqual(response.isError, true, JSON.stringify(response.content));
+      assert.equal(existsSync(join(groupPath, "owner__repo", "prepared")), false);
+    }
+    writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf child > prepared" }));
+    writeFileSync(parentConfig, JSON.stringify({ prepareCommand: "printf 'group prepare failed' >&2; exit 1" }));
+    const failedGroup = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+    });
+    assert.equal(failedGroup.isError, true);
+    assert.match(JSON.stringify(failedGroup.content), /group prepare failed/);
+    assert.equal(existsSync(join(groupPath, "owner__repo", "prepared")), false);
+    writeFileSync(parentConfig, "invalid JSON");
+    assert.equal((await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+    })).isError, true);
+    rmSync(parentConfig);
     const fallback = await client.callTool({
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.notEqual(fallback.isError, true, JSON.stringify(fallback.content));
     assert.equal(readFileSync(join(root, "my-group", "owner__repo", "prepared"), "utf8"), "child");
 
-    const groupPath = join(root, "my-group");
     writeFileSync(join(groupPath, "owner__repo", "AGENTS.md"), "Grouped changes must stay untouched");
     mkdirSync(join(root, "empty"));
     for (const input of [
@@ -161,7 +182,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       assert.equal((await client.callTool({ name: "prepare_repo", arguments: input })).isError, true);
     }
     assert.equal(readFileSync(join(groupPath, "owner__repo", "AGENTS.md"), "utf8"), "Grouped changes must stay untouched");
-    assert.equal(existsSync(join(groupPath, "prepared")), false);
+    assert.equal(readFileSync(join(groupPath, "prepared"), "utf8"), "parent");
 
     writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf 'prepare failed' >&2; exit 1" }));
     const failedPreparation = await client.callTool({

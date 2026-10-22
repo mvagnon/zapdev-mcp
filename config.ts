@@ -21,20 +21,20 @@ const configSchema = z.object({
 /** Optional repository and group lifecycle commands and URLs. */
 export type Config = z.infer<typeof configSchema>;
 
-/** Read configuration matching a checkout path, rejecting source symlinks. */
-export function readConfig(root: string, path: string): Config {
+/** Read configuration matching a checkout or group path; return undefined when absent and reject source symlinks. */
+export function readConfig(root: string, path: string): Config | undefined {
   let directory = homedir();
   for (const part of [".zapdev", "config", ...relative(root, path).split(sep)]) {
     directory = join(directory, part);
     const entry = lstatSync(directory, { throwIfNoEntry: false });
-    if (!entry) return {};
+    if (!entry) return undefined;
     if (!entry.isDirectory()) {
       throw new Error(`Expected an existing directory, not a symlink: ${directory}`);
     }
   }
   const file = join(directory, "zapdev.json");
   const entry = lstatSync(file, { throwIfNoEntry: false });
-  if (!entry) return {};
+  if (!entry) return undefined;
   if (!entry.isFile()) throw new Error(`Expected a regular config file, not a symlink: ${file}`);
   try {
     return configSchema.parse(JSON.parse(readFileSync(file, "utf8")));

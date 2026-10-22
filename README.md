@@ -130,8 +130,9 @@ Returns the absolute checkout `path`.
 Only the selected checkout is prepared.
 
 After Git preparation and secret linking, runs the optional `prepareCommand` from `zapdev.json`.
-Only that checkout's command runs.
-Grouped checkouts also link group-root secrets before running their command.
+With `group`, an existing group configuration takes precedence over the checkout configuration; its command runs in the group directory.
+Only when the group configuration file is absent does the checkout's command run, in the checkout directory.
+Grouped checkouts link both group-root and selected repository secrets before running the selected command.
 Each command has a 180-second timeout.
 Preparation stops at the first failure.
 Completed Git changes and secret links are not rolled back.
@@ -146,7 +147,7 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | `my-group/owner__repo/.env`        | `my-group/owner__repo/.env`                |
 | `owner__repo/.env.local`           | `owner__repo/.env.local` (without `group`) |
 
-With `repo + group`, both group-root files and repository secrets are linked before the checkout prepare command.
+With `repo + group`, both group-root files and repository secrets are linked before the selected prepare command.
 Group-root secrets stay in the group directory, never in child checkouts.
 Only the selected checkout's secrets are linked recursively.
 Other repos' secrets are untouched.
@@ -199,7 +200,8 @@ Copy this template to the applicable location and adapt the commands and URLs:
 ```
 
 All fields are optional.
-Missing files and `{}` mean empty configuration.
+An existing configuration file takes precedence even when it contains `{}` or lacks the relevant command or services.
+Only a missing group configuration file enables fallback to checkout configurations; configurations are not merged.
 Omitted commands do not run.
 URLs are metadata and are not returned by service tools.
 They must be absolute URLs, including database schemes.
@@ -233,14 +235,17 @@ Commands and services are scoped to the selection:
 
 - Service tools default to the MCP server's working directory.
 - A checkout path selects only that repo.
-- A group path selects the group's services and all immediate child checkouts' services.
-- A group with `services: {}` does not disable child checkout services.
+- A group path selects only the group's services when its configuration file exists.
+- Without a group configuration file, a group path selects its immediate child checkouts' services.
+- A group configuration with `{}`, `services: {}`, or no `services` selects no services; it does not fall back to children.
 - The service-name filter applies across all selected paths, including duplicate names.
 - `prepare_repo` with `repo` alone selects a root checkout.
-- `prepare_repo` with `repo` and `group` selects one grouped checkout.
+- `prepare_repo` with `repo` and `group` prepares one checkout, then uses the group configuration if present, otherwise that checkout's configuration.
 - `prepare_repo` requires `repo`; `group` alone is rejected.
-- Selecting one checkout never runs group commands or services.
-- Group commands and services never replace child commands or services.
+- Explicit checkout paths for start, stop, and logs never select group services.
+- Start, stop, and logs use the same configuration selection.
+
+Before adopting a group configuration, stop any previously started child services using their explicit checkout paths.
 
 ### `start_server`
 
@@ -260,7 +265,7 @@ With `ZD_REPOS_DIR=/srv/repos`:
 - `{"path":"/srv/repos/my-group"}` selects the whole group.
 
 A subdirectory inside a checkout resolves to its root.
-Selecting `ZD_REPOS_DIR` itself includes its own services and immediate checkouts.
+Selecting `ZD_REPOS_DIR` itself uses its configuration if present, otherwise its immediate checkouts.
 Nested groups are not traversed.
 
 **The default cwd belongs to the server process, not your MCP client's active folder.**

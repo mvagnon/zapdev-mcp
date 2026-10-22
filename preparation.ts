@@ -49,9 +49,10 @@ function linkSelectedSecrets(parent: string, group?: string, checkoutName?: stri
   linkSecrets(checkoutName === undefined ? source : join(source, checkoutName), parent, checkoutName !== undefined);
 }
 
-async function prepareCommand(root: string, path: string): Promise<void> {
-  const command = readConfig(root, path).prepareCommand;
-  if (command !== undefined) await exec("/bin/sh", ["-c", command], { cwd: path, timeout: 180_000 });
+async function prepareCommand(root: string, path: string, parent = path): Promise<void> {
+  const config = readConfig(root, parent);
+  const command = (config ?? readConfig(root, path))?.prepareCommand;
+  if (command !== undefined) await exec("/bin/sh", ["-c", command], { cwd: config === undefined ? path : parent, timeout: 180_000 });
 }
 
 async function prepareRepository(root: string, repo: string, group?: string, branch?: string): Promise<{ path: string }> {
@@ -95,7 +96,7 @@ async function prepareRepository(root: string, repo: string, group?: string, bra
     await git(path, "clean", "--quiet", "-fd");
     if (group !== undefined) linkSelectedSecrets(parent, group);
     linkSelectedSecrets(path, group, checkoutName);
-    await prepareCommand(root, path);
+    await prepareCommand(root, path, group === undefined ? path : parent);
     return { path };
   } finally {
     rmdirSync(lock);

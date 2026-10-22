@@ -48,9 +48,11 @@ function selection({ path: requested }: Selection): {
 
 function selected(input: Selection): { path: string; services: Service[] } {
   const { root, path, isRepository } = selection(input);
-  const paths = isRepository ? [path] : [path, ...repositoryPaths(path)];
-  const services = paths.flatMap(path =>
-    Object.entries(readConfig(root, path).services ?? {}).map(([name, config]) => ({ name, path, ...config })));
+  const config = readConfig(root, path);
+  const paths = isRepository || config !== undefined ? [path] : repositoryPaths(path);
+  const services = paths.flatMap(servicePath =>
+    Object.entries((servicePath === path ? config : readConfig(root, servicePath))?.services ?? {})
+      .map(([name, config]) => ({ name, path: servicePath, ...config })));
   const filtered = input.service === undefined ? services : services.filter(({ name }) => name === input.service);
   if (input.service !== undefined && filtered.length === 0) throw new Error(`Unknown service: ${input.service}`);
   return { path, services: filtered };
@@ -82,7 +84,7 @@ async function result(action: () => Promise<ServiceOutput>): Promise<CallToolRes
 const selectionSchema = z.object({
   path: z.string().optional().transform(value => value === "" ? undefined : value)
     .refine(value => value === undefined || isAbsolute(value), "Expected an absolute checkout or group path.")
-    .describe("Absolute checkout/group path in ZD_REPOS_DIR (no ~). Default: server cwd. A group includes its immediate child repos."),
+    .describe("Absolute checkout/group path in ZD_REPOS_DIR (no ~). Default: server cwd. A group uses its config if present; otherwise its immediate child repos."),
   service: serviceNameSchema.optional().describe("Service name; omitted selects all."),
 }).strict();
 
