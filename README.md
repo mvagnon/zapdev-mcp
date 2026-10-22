@@ -35,6 +35,7 @@ flowchart LR
 
 - `index.ts`: MCP server, input validation, repository management, and CLI calls.
 - `repositories.ts`: shared repository paths and input validation.
+- `preparation.ts`: isolated repository and whole-group preparation.
 - `config.ts`: shared repository and group configuration.
 - `servers.ts`: server configuration, lifecycle commands, and startup context.
 - `service-manager.ts`: isolated systemd user units and bounded log access.
@@ -115,18 +116,26 @@ moved or deleted.
 
 | Argument | Required | Description                                                         |
 | -------- | -------- | ------------------------------------------------------------------- |
-| `repo`   | Yes      | GitHub repository as `owner/repo`                                   |
-| `group`  | No       | Group folder under the repositories root; a single name, not a path |
-| `branch` | No       | Remote branch to check out; defaults to the remote's default branch |
+| `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`; without `group`, selects the root checkout |
+| `group`  | Unless `repo` is supplied | Single group name; alone, refreshes all existing immediate child checkouts |
+| `branch` | No       | Remote branch for each selected repo; defaults to each remote's default branch |
 
-Returns only the absolute checkout `path`. Use `start_server` to retrieve
+With `repo`, returns only the absolute checkout `path`. With `group` alone,
+returns the group's `path` and `repositories: [{ path }]`. Only existing immediate
+Git checkouts are refreshed; other directories, hidden directories, and symlinks
+are ignored. GitHub origin URLs must match their checkout directory names.
+No new repositories are discovered or cloned in group-only mode.
+Use `start_server` to retrieve
 `AGENTS.md` instructions and configured URLs. This replaces `get_repo`;
 clients using the old tool name must switch to `prepare_repo`.
 
 After Git preparation and secret linking, runs the optional `prepareCommand` from
-`zapdev.json`. The group's command takes priority and runs in the group directory;
-otherwise the repository's command runs in its checkout. Waits for completion
-(up to 180 seconds) before returning `path`. Command output is not included in
+`zapdev.json`. With `repo`, only that checkout's command runs, never its group's.
+With `group` alone, each checkout is refreshed and runs its own command, then
+group-root secrets are linked and the group's command runs once, even for an
+empty group. Waits for each command (up to 180 seconds). Preparation stops at the
+first failure; later repositories and the group command are not processed.
+Command output is not included in
 successful responses; command failures return an MCP error. Completed Git changes
 and secret links are not rolled back. Without a command, nothing extra runs.
 
@@ -138,9 +147,10 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | `my-group/owner-repo/.env`        | `my-group/owner-repo/.env`                |
 | `owner-repo/.env.local`           | `owner-repo/.env.local` (without `group`) |
 
+Group-root files are linked only when preparing `group` alone, not `group + repo`.
 Only files directly inside the group folder are linked into the group root.
-The selected repository's secrets include subdirectories; other repositories are
-not linked. Grouped checkouts do not inherit secrets from outside their group.
+With `repo`, that checkout's secrets include subdirectories; other repositories
+are not linked. Grouped checkouts do not inherit secrets from outside their group.
 Missing secrets folders are ignored. Existing regular files (including old copies)
 are replaced with absolute symlinks; links to the expected source are preserved.
 Source symlinks, unrelated destination symlinks, and Git metadata are rejected.
@@ -192,7 +202,7 @@ unknown fields, and source symlinks are rejected.
 | Field | Meaning |
 | ----- | ------- |
 | `prepareCommand` | Optional nonempty shell command executed by `prepare_repo` |
-| `services` | Optional object of named services; `{}` disables child services on a group |
+| `services` | Optional object of named services for this checkout or group; `{}` defines none |
 | `services.<name>.startCommand` | Required nonempty shell command for that service |
 | `services.<name>.stopCommand` | Optional nonempty shell command executed after the service's processes stop |
 | `frontUrl`, `apiUrl`, `dbUrl` | Optional URLs returned in startup context |
@@ -212,17 +222,17 @@ stopped services and be safe to repeat.
 Replace them with `services`. Startup responses now contain `services`, not
 `commands` or PIDs. Configured service supervision requires Linux/systemd.
 
-The parent takes priority **per field**:
+Commands and services are scoped to the selection; context keeps parent priority:
 
-- A group's `prepareCommand` replaces the selected child's prepare command and
-  runs in the group directory, **once per `prepare_repo` call**, after that
-  repository's Git preparation and secret linking. Other children might not yet
-  be prepared. Without a parent command, the child's command runs in its checkout.
-- A group's `services` object replaces all selected child services, without merging
-  names, and runs in the group directory. Without it, each child's services run in
-  its checkout. A single grouped repository can therefore start or stop shared
-  group services. Stop services before renaming/removing their configuration or
-  changing this override, so their original units remain selectable.
+- `repo` alone targets only `<ZD_REPOS_DIR>/<owner>-<repo>`; it never searches groups.
+- `group + repo` targets only that checkout's Git operations, secrets, prepare command,
+  and services. Group commands and services never replace or augment its own.
+- `group` alone includes the group's commands/services and all immediate child
+  checkouts' commands/services. A group with `services: {}` does not disable children.
+  The service-name filter applies across all selected paths, including duplicate names.
+- **Behavior change:** callers relying on a single repository to manage shared group
+  services or run the group's prepare command must now call with `group` alone.
+  Service IDs remain unchanged; existing units remain selectable by their original paths.
 - Each parent URL overrides the corresponding child URL. Other child URLs remain
   available. Grouped repositories do not inherit standalone configuration.
 - Group `AGENTS.md` instructions take priority over repository instructions;
@@ -232,12 +242,12 @@ The parent takes priority **per field**:
 
 Start a prepared repository or group and return its context. Does not clone,
 fetch, pull, switch branches, or reset repositories; call `prepare_repo` first
-for each repository.
+for the repository or whole group.
 
 | Argument | Required                   | Description                                                      |
 | -------- | -------------------------- | ---------------------------------------------------------------- |
 | `repo`   | Unless `group` is supplied | GitHub repository as `owner/repo`                                |
-| `group`  | Unless `repo` is supplied  | Group name; combine with `repo` to select one grouped repository |
+| `group`  | Unless `repo` is supplied  | Alone: group services plus all child services; with `repo`: only that checkout |
 | `service` | No                       | Configured service name; otherwise selects all services          |
 
 Examples: `{"repo":"owner/repo"}`, `{"group":"my-group"}`, or
@@ -297,7 +307,7 @@ the journal. Logs remain available after service stops and MCP restarts.
 
 | Argument | Required | Description |
 | -------- | -------- | ----------- |
-| `repo` / `group` | At least one | Same selection and group overrides as startup |
+| `repo` / `group` | At least one | Same repository/group scope as startup |
 | `service` | No | Select a configured name; otherwise returns every selected service |
 | `lines` | No | Last lines per service; defaults to 100, maximum 1000 |
 

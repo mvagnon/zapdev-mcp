@@ -27,9 +27,11 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
         PATH: process.env.PATH ?? "",
         HOME: directory,
         ZD_REPOS_DIR: root,
-        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_COUNT: "2",
         GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
         GIT_CONFIG_VALUE_0: "https://github.com/owner/repo.git",
+        GIT_CONFIG_KEY_1: `url.file://${source}.insteadOf`,
+        GIT_CONFIG_VALUE_1: "https://github.com/owner/second.git",
       },
     }));
 
@@ -77,10 +79,9 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
           assert.equal(readlinkSync(join(expected, ".env.local")), join(secrets, "owner-repo", ".env.local"));
         }
         if (group === "my-group") {
-          assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), '{"group":true}');
+          assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), "old copied secret");
           assert.equal(readFileSync(join(expected, ".env"), "utf8"), "GROUP=private");
           assert.equal(readFileSync(join(expected, "nested", "key.pem"), "utf8"), "nested private key");
-          assert.equal(readlinkSync(join(root, group, "config.json")), join(groupSecrets, "config.json"));
           assert.equal(readlinkSync(join(expected, ".env")), join(repoSecrets, ".env"));
           assert.equal(readlinkSync(join(expected, "nested", "key.pem")), join(repoSecrets, "nested", "key.pem"));
           assert.equal(existsSync(join(root, group, "other-repo")), false);
@@ -117,8 +118,8 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
         });
         assert.notEqual(result.isError, true, JSON.stringify(result.content));
         assert.deepEqual(result.structuredContent, { path });
-        assert.equal(readFileSync(join(group ? parent : path, "prepared"), "utf8"), group ? "parent" : "standalone");
-        if (group) assert.equal(existsSync(join(path, "prepared")), false);
+        assert.equal(readFileSync(join(path, "prepared"), "utf8"), group ? "child" : "standalone");
+        if (group) assert.equal(existsSync(join(parent, "prepared")), false);
       }
     }
 
@@ -128,6 +129,43 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     });
     assert.notEqual(fallback.isError, true, JSON.stringify(fallback.content));
     assert.equal(readFileSync(join(root, "my-group", "owner-repo", "prepared"), "utf8"), "child");
+
+    const second = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/second", group: "my-group" },
+    });
+    assert.notEqual(second.isError, true, JSON.stringify(second.content));
+    mkdirSync(join(config, "my-group", "owner-second"));
+    writeFileSync(join(config, "my-group", "owner-second", "zapdev.json"), JSON.stringify({
+      prepareCommand: "printf second > prepared",
+    }));
+    writeFileSync(parentConfig, JSON.stringify({
+      prepareCommand: "test -L config.json && test -f owner-repo/prepared && test -f owner-second/prepared && printf parent >> prepared",
+    }));
+    const groupPath = join(root, "my-group");
+    mkdirSync(join(groupPath, "not-a-repository"));
+    symlinkSync(join(root, "owner-repo"), join(groupPath, "linked-repo"));
+    writeFileSync(join(root, "owner-repo", "AGENTS.md"), "Standalone must stay untouched");
+    writeFileSync(join(root, "other-group", "owner-repo", "AGENTS.md"), "Other group must stay untouched");
+    writeFileSync(join(groupPath, "owner-repo", "AGENTS.md"), "Discard grouped changes");
+    const preparedGroup = await client.callTool({ name: "prepare_repo", arguments: { group: "my-group" } });
+    assert.notEqual(preparedGroup.isError, true, JSON.stringify(preparedGroup.content));
+    assert.deepEqual(preparedGroup.structuredContent, {
+      path: groupPath,
+      repositories: [{ path: join(groupPath, "owner-repo") }, { path: join(groupPath, "owner-second") }],
+    });
+    assert.equal(readFileSync(join(groupPath, "prepared"), "utf8"), "parent");
+    assert.equal(readlinkSync(join(groupPath, "config.json")), join(groupSecrets, "config.json"));
+    assert.equal(readFileSync(join(groupPath, "owner-repo", "prepared"), "utf8"), "child");
+    assert.equal(readFileSync(join(groupPath, "owner-second", "prepared"), "utf8"), "second");
+    assert.equal(readFileSync(join(groupPath, "owner-repo", "AGENTS.md"), "utf8"), "Repository instructions");
+    assert.equal(readFileSync(join(root, "owner-repo", "AGENTS.md"), "utf8"), "Standalone must stay untouched");
+    assert.equal(readFileSync(join(root, "other-group", "owner-repo", "AGENTS.md"), "utf8"), "Other group must stay untouched");
+    assert.equal((await client.callTool({ name: "prepare_repo", arguments: {} })).isError, true);
+    assert.equal((await client.callTool({ name: "prepare_repo", arguments: { group: "missing" } })).isError, true);
+    mkdirSync(join(root, "empty"));
+    assert.deepEqual((await client.callTool({ name: "prepare_repo", arguments: { group: "empty" } })).structuredContent, {
+      path: join(root, "empty"), repositories: [],
+    });
 
     writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf 'prepare failed' >&2; exit 1" }));
     const failedPreparation = await client.callTool({
@@ -147,7 +185,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     rmSync(groupConfig);
     symlinkSync(outside, groupConfig);
     const unsafeDestination = await client.callTool({
-      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+      name: "prepare_repo", arguments: { group: "my-group" },
     });
     assert.equal(unsafeDestination.isError, true);
     assert.equal(readFileSync(outside, "utf8"), "untouched");

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstatSync, mkdirSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
@@ -47,4 +47,19 @@ export function ensureDirectory(path: string): void {
     throw new Error(`Refusing to use a non-directory or symlink: ${path}`);
   }
   mkdirSync(path, { recursive: true });
+}
+
+/** Require an existing directory, rejecting files and symbolic links. */
+export function requireDirectory(path: string): void {
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`Expected an existing directory, not a symlink: ${path}`);
+  }
+}
+
+/** List immediate prepared checkouts, excluding hidden directories and symlinks. */
+export function repositoryPaths(parent: string): string[] {
+  return readdirSync(parent, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith(".") &&
+      lstatSync(join(parent, entry.name, ".git"), { throwIfNoEntry: false })?.isDirectory())
+    .map(entry => join(parent, entry.name)).sort();
 }

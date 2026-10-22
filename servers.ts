@@ -1,10 +1,10 @@
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { readConfig, serviceNameSchema, type Config } from "./config.js";
-import { groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
+import { groupSchema, repoSchema, repositoryPaths, repositoryRoot, requireDirectory } from "./repositories.js";
 import { runService, type Service, type ServiceResult } from "./service-manager.js";
 
 type Selection = { repo?: string; group?: string; service?: string };
@@ -15,12 +15,6 @@ type Context = {
   apiUrl?: string;
   dbUrl?: string;
 };
-
-function requireDirectory(path: string): void {
-  if (!lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) {
-    throw new Error(`Expected an existing directory, not a symlink: ${path}`);
-  }
-}
 
 function requireRepository(path: string): void {
   requireDirectory(path);
@@ -57,18 +51,16 @@ function selection({ repo, group }: Selection): {
 
 function selected(input: Selection): { context: Record<string, unknown>; services: Service[] } {
   const { root, parent, path, parentConfig } = selection(input);
-  const paths = input.repo ? [path] : readdirSync(parent, { withFileTypes: true })
-    .filter(entry => entry.isDirectory() && !entry.name.startsWith(".") &&
-      lstatSync(join(parent, entry.name, ".git"), { throwIfNoEntry: false })?.isDirectory())
-    .map(entry => join(parent, entry.name)).sort();
+  const paths = input.repo ? [path] : repositoryPaths(parent);
   const repositories = paths.map(path => {
-    const config = { ...readConfig(root, path), ...parentConfig };
-    return { context: context(path, config), config };
+    const config = readConfig(root, path);
+    return { context: context(path, { ...config, ...parentConfig }), config };
   });
-  const services = parentConfig.services !== undefined
-    ? Object.entries(parentConfig.services).map(([name, config]) => ({ name, path: parent, ...config }))
-    : repositories.flatMap(({ context, config }) =>
-      Object.entries(config.services ?? {}).map(([name, config]) => ({ name, path: context.path, ...config })));
+  const services = [
+    ...(!input.repo ? Object.entries(parentConfig.services ?? {}).map(([name, config]) => ({ name, path: parent, ...config })) : []),
+    ...repositories.flatMap(({ context, config }) =>
+      Object.entries(config.services ?? {}).map(([name, config]) => ({ name, path: context.path, ...config }))),
+  ];
   const filtered = input.service === undefined ? services : services.filter(({ name }) => name === input.service);
   if (input.service !== undefined && filtered.length === 0) throw new Error(`Unknown service: ${input.service}`);
   return {
@@ -108,7 +100,8 @@ export function registerServerTools(server: McpServer): void {
         "Start an already prepared repository or group without running Git operations. " +
         "Supply repo, group, or both to select a repository within a group. " +
         "Requires Linux and a running systemd user manager. Reads named services from ~/.zapdev/config. " +
-        "A parent's services object replaces all child services; otherwise starts selected child services. " +
+        "With repo, selects only that checkout's services, at the root unless group is supplied. " +
+        "With group alone, selects the group's services and all immediate child checkouts' services. " +
         "Each service gets an independent systemd user unit and persistent logs; no PIDs to manage. " +
         "Already active services are reused; failed services return errors until stopped. " +
         "Returns service names, stable unit IDs and systemd states, not readiness guarantees. " +
@@ -130,7 +123,7 @@ export function registerServerTools(server: McpServer): void {
   server.registerTool("stop_server", {
     description:
       "Stop named services in a prepared repository or group using systemd --user. " +
-      "Uses the same parent overrides and optional service filter as start_server. " +
+      "Uses the same repository/group scope and optional service filter as start_server. " +
       "First sends SIGINT (Ctrl-C) to all processes in the unit, waiting up to 30 seconds before SIGKILL. " +
       "Then runs the optional stopCommand as cleanup, with its own 30-second systemd timeout. " +
       "Already stopped services are unchanged. Returns final states, errors and bounded final logs. " +
@@ -147,7 +140,7 @@ export function registerServerTools(server: McpServer): void {
   server.registerTool("server_logs", {
     description:
       "Read persisted stdout/stderr logs for named services in a prepared repository or group. " +
-      "Uses the same parent overrides and optional service filter as start_server. " +
+      "Uses the same repository/group scope and optional service filter as start_server. " +
       "Returns the last lines (default 100, maximum 1000), reading at most 64 KiB per service, without streaming. " +
       "ANSI control sequences are removed; truncated indicates omitted older content. " +
       "Logs remain available after stopping services or restarting the MCP. Logs may contain application secrets.",

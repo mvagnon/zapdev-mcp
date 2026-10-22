@@ -1,58 +1,16 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import {
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readlinkSync,
-  realpathSync,
-  rmdirSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { readConfig } from "./config.js";
-import { ensureDirectory, git, groupSchema, repoSchema, repositoryRoot } from "./repositories.js";
+import { prepareSelection } from "./preparation.js";
+import { git, groupSchema, repoSchema } from "./repositories.js";
 import { registerServerTools } from "./servers.js";
 
 const exec = promisify(execFile);
-const home = homedir();
-
-function linkSecrets(source: string, destination: string, recursive: boolean): void {
-  const directory = lstatSync(source, { throwIfNoEntry: false });
-  if (!directory) return;
-  if (!directory.isDirectory()) {
-    throw new Error(`Refusing to read secrets from a non-directory or symlink: ${source}`);
-  }
-  ensureDirectory(destination);
-  for (const entry of readdirSync(source, { withFileTypes: true })) {
-    const from = join(source, entry.name);
-    const to = join(destination, entry.name);
-    if (entry.name.toLowerCase() === ".git") {
-      throw new Error(`Refusing to link Git metadata from secrets: ${from}`);
-    }
-    if (entry.isDirectory()) {
-      if (recursive) linkSecrets(from, to, true);
-    } else {
-      if (!entry.isFile()) {
-        throw new Error(`Refusing to link a non-file or symlink from secrets: ${from}`);
-      }
-      const target = lstatSync(to, { throwIfNoEntry: false });
-      if (target?.isSymbolicLink() && readlinkSync(to) === from) continue;
-      if (target && !target.isFile()) {
-        throw new Error(`Refusing to overwrite a non-file or symlink: ${to}`);
-      }
-      if (target) rmSync(to);
-      symlinkSync(from, to);
-    }
-  }
-}
 
 /** Run zapdev through npx in one repository, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: string[], branch?: string): Promise<CallToolResult> {
@@ -103,156 +61,36 @@ server.registerTool(
       "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>-<repo> " +
       "(defaults to ~/.zapdev/repos/<owner>-<repo>). " +
       "When group is supplied, place the checkout in <ZD_REPOS_DIR>/<group>/<owner>-<repo>. " +
-      "Links matching files from ~/.zapdev/secrets into the group root and repository after refresh. " +
+      "Supply group alone to refresh all existing immediate child checkouts, without cloning new repositories. " +
+      "With repo, links matching files from ~/.zapdev/secrets and runs prepareCommand only for that checkout, never for its group. " +
+      "With group alone, prepares each child, then links group-root secrets and runs the group's prepareCommand once. " +
       "Secret symlinks replace matching files; keep them Git-ignored to avoid committing them. " +
       "Edits through these links modify the source secrets. " +
       "After linking secrets, runs the optional prepareCommand from ~/.zapdev/config and waits up to 180 seconds. " +
-      "The group's command takes priority and runs once per prepare_repo call in the group directory; " +
-      "otherwise the repository command runs in its checkout. Missing commands do nothing; failures return an error. " +
-      "Returns only its absolute path; use start_server for AGENTS.md instructions and configured URLs. " +
+      "Missing commands do nothing; failures return an error. Group preparation stops at the first failure; completed changes are not rolled back. " +
+      "Returns its absolute path, plus repositories for a whole group; use start_server for AGENTS.md instructions and configured URLs. " +
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
       "Never use for repositories containing work you want to keep.",
     inputSchema: z
       .object({
-        repo: repoSchema,
+        repo: repoSchema.optional(),
         group: groupSchema,
         branch: z
           .string()
           .optional()
-          .describe("Optional remote branch to check out."),
+          .describe("Optional remote branch to check out in each selected repository."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   async ({ repo, group, branch }) => {
     try {
-      if (branch) await git(home, "check-ref-format", "--branch", branch);
-      const owner = repo.slice(0, repo.indexOf("/"));
-      const name = repo.slice(repo.indexOf("/") + 1);
-      const root = repositoryRoot();
-      const parent = group === undefined ? root : join(root, group);
-      const checkoutName = `${owner}-${name}`;
-      const path = join(parent, checkoutName);
-      const directories = process.env.ZD_REPOS_DIR
-        ? [root, parent]
-        : [join(home, ".zapdev"), root, parent];
-      for (const directory of directories) {
-        ensureDirectory(directory);
-      }
-
-      const lock = join(parent, `.${checkoutName}.lock`);
-      mkdirSync(lock);
-      try {
-        const entry = lstatSync(path, { throwIfNoEntry: false });
-        if (entry) {
-          if (
-            !entry.isDirectory() ||
-            !lstatSync(join(path, ".git"), {
-              throwIfNoEntry: false,
-            })?.isDirectory()
-          ) {
-            throw new Error(
-              `Refusing to overwrite a non-checkout path: ${path}`,
-            );
-          }
-          if (
-            (await git(path, "rev-parse", "--show-toplevel")) !==
-            realpathSync(path)
-          ) {
-            throw new Error(
-              `Checkout worktree does not match its path: ${path}`,
-            );
-          }
-          const remote = (
-            await git(path, "config", "--get", "remote.origin.url")
-          )
-            .replace(/\.git$/, "")
-            .toLowerCase();
-          if (
-            ![
-              `https://github.com/${repo}`,
-              `git@github.com:${repo}`,
-              `ssh://git@github.com/${repo}`,
-            ].includes(remote)
-          ) {
-            throw new Error(`Checkout remote does not match ${repo}: ${path}`);
-          }
-          await git(
-            path,
-            "fetch",
-            "--quiet",
-            "--prune",
-            "origin",
-            "+refs/heads/*:refs/remotes/origin/*",
-          );
-        } else {
-          mkdirSync(path);
-          try {
-            await git(
-              parent,
-              "clone",
-              "--quiet",
-              "--filter=blob:none",
-              `https://github.com/${repo}.git`,
-              path,
-            );
-          } catch (error) {
-            rmSync(path, { recursive: true, force: true });
-            throw error;
-          }
-        }
-
-        if (!branch) {
-          await git(path, "remote", "set-head", "origin", "--auto");
-          branch = (
-            await git(
-              path,
-              "symbolic-ref",
-              "--quiet",
-              "refs/remotes/origin/HEAD",
-            )
-          ).slice("refs/remotes/origin/".length);
-        }
-        const reference = `refs/remotes/origin/${branch}`;
-        await git(path, "rev-parse", "--verify", `${reference}^{commit}`);
-        await git(
-          path,
-          "checkout",
-          "--quiet",
-          "--force",
-          "-B",
-          branch,
-          reference,
-        );
-        await git(path, "clean", "--quiet", "-fd");
-
-        const output = { path };
-        const secrets = join(home, ".zapdev", "secrets");
-        const secretsDirectory = lstatSync(secrets, { throwIfNoEntry: false });
-        if (secretsDirectory) {
-          if (!secretsDirectory.isDirectory()) {
-            throw new Error(`Refusing to use a non-directory or symlink: ${secrets}`);
-          }
-          const secretsParent = group === undefined ? secrets : join(secrets, group);
-          if (group !== undefined) linkSecrets(secretsParent, parent, false);
-          linkSecrets(join(secretsParent, checkoutName), path, true);
-        }
-        const parentCommand = group === undefined ? undefined : readConfig(root, parent).prepareCommand;
-        const command = parentCommand ?? readConfig(root, path).prepareCommand;
-        if (command !== undefined) {
-          await exec("/bin/sh", ["-c", command], {
-            cwd: parentCommand === undefined ? path : parent,
-            timeout: 180_000,
-          });
-        }
-        return {
-          content: [{ type: "text", text: JSON.stringify(output) }],
-          structuredContent: output,
-        };
-      } finally {
-        rmdirSync(lock);
-      }
+      const output = await prepareSelection({ repo, group, branch });
+      return {
+        content: [{ type: "text", text: JSON.stringify(output) }],
+        structuredContent: output,
+      };
     } catch (error) {
       const output = {
         error: error instanceof Error ? error.message : String(error),
