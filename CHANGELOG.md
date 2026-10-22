@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.3.0...v1.4.0) (2026-10-22)
+
+
+### Features
+
+* **repos:** Add repositories and servers modules to prepare repos and manage start/stop server tooling. ([e943ed7](https://github.com/mvagnon/zapdev-mcp/commit/e943ed702e0ade54c7c1ec26a76b600c52bdbd94))
+
 ## [1.3.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.2.1...v1.3.0) (2026-10-22)
 
 
