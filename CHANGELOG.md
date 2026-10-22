@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.1.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.0.1...v2.1.0) (2026-10-22)
+
+
+### Features
+
+* **preparation:** Refine grouped preparation: link group-root secrets prior to checkout command and clarify behavior. ([9413f38](https://github.com/mvagnon/zapdev-mcp/commit/9413f38bc557607cc860a917578d37f57a6f9990))
+
+
+### Bug Fixes
+
+* Clarify tool descriptions and input schemas across index.ts, repositories.ts, and servers.ts with simplified text and no breaking changes. ([1bd0a09](https://github.com/mvagnon/zapdev-mcp/commit/1bd0a0924fc429b94d6191fd49d2e75b3346a9a2))
+* **logs:** Read logs from the user journal for named services and expose status ([26ba3b5](https://github.com/mvagnon/zapdev-mcp/commit/26ba3b5429bfaa8373a604e94349ce1f454822b6))
+* **repositories:** Introduce repositorySelectionSchema and switch commands to path-based selection for repo/group, allowing empty values and requiring at least one nonempty target ([aa9a45c](https://github.com/mvagnon/zapdev-mcp/commit/aa9a45cacb8d73c45a9599771489415305eb02ae))
+
 ## [2.0.1](https://github.com/mvagnon/zapdev-mcp/compare/v2.0.0...v2.0.1) (2026-10-22)
 
 
