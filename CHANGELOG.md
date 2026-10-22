@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.1.0...v1.2.0) (2026-10-21)
+
+
+### Features
+
+* **get_repo:** support ZD_REPOS_DIR override for checkout root ([39f7b37](https://github.com/mvagnon/zapdev-mcp/commit/39f7b3714a4fc78f8956e91d4e54fa7a8cac4e26))
+
 ## [1.1.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.0.0...v1.1.0) (2026-10-21)
 
 
