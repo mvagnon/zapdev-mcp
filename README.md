@@ -133,6 +133,25 @@ moved or deleted.
 Returns the absolute checkout `path` and `agents_md` containing the root
 `AGENTS.md` when present. Use the returned path for subsequent tools.
 
+After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secrets`:
+
+| Source under `~/.zapdev/secrets/` | Destination under `ZD_REPOS_DIR` |
+| ------------------------------- | -------------------------------- |
+| `my-group/config.json` | `my-group/config.json` |
+| `my-group/owner-repo/.env` | `my-group/owner-repo/.env` |
+| `owner-repo/.env.local` | `owner-repo/.env.local` (without `group`) |
+
+Only files directly inside the group folder are linked into the group root.
+The selected repository's secrets include subdirectories; other repositories are
+not linked. Grouped checkouts do not inherit secrets from outside their group.
+Missing secrets folders are ignored. Existing regular files (including old copies)
+are replaced with absolute symlinks; links to the expected source are preserved.
+Source symlinks, unrelated destination symlinks, and Git metadata are rejected.
+Source permissions are unchanged: protect sensitive source files with `0600`.
+Changes to the source are immediately visible through the link, and editing
+through the link modifies the source secret. Keep repository symlinks ignored by
+Git to prevent accidental commits; this tool does not add ignore rules.
+
 **Destructive:** checkouts are disposable. Refreshing force-checks out the remote
 branch, overwrites tracked changes, and removes untracked files and directories
 except ignored files. Never use this tool for a checkout containing work you

@@ -5,10 +5,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmdirSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -36,6 +39,42 @@ function ensureDirectory(path: string): void {
     throw new Error(`Refusing to use a non-directory or symlink: ${path}`);
   }
   mkdirSync(path, { recursive: true });
+}
+
+function linkSecrets(source: string, destination: string, recursive: boolean): void {
+  const directory = lstatSync(source, { throwIfNoEntry: false });
+  if (!directory) return;
+  if (!directory.isDirectory()) {
+    throw new Error(`Refusing to read secrets from a non-directory or symlink: ${source}`);
+  }
+  ensureDirectory(destination);
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const from = join(source, entry.name);
+    const to = join(destination, entry.name);
+    if (entry.name.toLowerCase() === ".git") {
+      throw new Error(`Refusing to link Git metadata from secrets: ${from}`);
+    }
+    if (entry.isDirectory()) {
+      if (recursive) linkSecrets(from, to, true);
+    } else {
+      if (!entry.isFile()) {
+        throw new Error(`Refusing to link a non-file or symlink from secrets: ${from}`);
+      }
+      const target = lstatSync(to, { throwIfNoEntry: false });
+      if (target?.isSymbolicLink() && readlinkSync(to) === from) continue;
+      if (target && !target.isFile()) {
+        throw new Error(`Refusing to overwrite a non-file or symlink: ${to}`);
+      }
+      const temporary = mkdtempSync(join(destination, ".get-repo-secret-"));
+      try {
+        const file = join(temporary, "secret");
+        symlinkSync(from, file);
+        renameSync(file, to);
+      } finally {
+        rmSync(temporary, { recursive: true, force: true });
+      }
+    }
+  }
 }
 
 /** Run zapdev through npx in one repository, returning CLI output or an MCP error. */
@@ -87,6 +126,9 @@ server.registerTool(
       "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>-<repo> " +
       "(defaults to ~/.zapdev/repos/<owner>-<repo>). " +
       "When group is supplied, place the checkout in <ZD_REPOS_DIR>/<group>/<owner>-<repo>. " +
+      "Links matching files from ~/.zapdev/secrets into the group root and repository after refresh. " +
+      "Secret symlinks replace matching files; keep them Git-ignored to avoid committing them. " +
+      "Edits through these links modify the source secrets. " +
       "Returns its absolute path and root AGENTS.md contents when present. " +
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
@@ -225,6 +267,16 @@ server.registerTool(
         const instructions = join(path, "AGENTS.md");
         if (lstatSync(instructions, { throwIfNoEntry: false })?.isFile()) {
           output.agents_md = readFileSync(instructions, "utf8");
+        }
+        const secrets = join(home, ".zapdev", "secrets");
+        const secretsDirectory = lstatSync(secrets, { throwIfNoEntry: false });
+        if (secretsDirectory) {
+          if (!secretsDirectory.isDirectory()) {
+            throw new Error(`Refusing to use a non-directory or symlink: ${secrets}`);
+          }
+          const secretsParent = group === undefined ? secrets : join(secrets, group);
+          if (group !== undefined) linkSecrets(secretsParent, parent, false);
+          linkSecrets(join(secretsParent, checkoutName), path, true);
         }
         return {
           content: [{ type: "text", text: JSON.stringify(output) }],
