@@ -105,7 +105,7 @@ export function registerServerTools(server: McpServer): void {
   server.registerTool("stop_server", {
     description:
       "Stop services via Linux/systemd: SIGINT, then SIGKILL after 30s, then optional cleanup. " +
-      "Returns final states/errors; use server_logs for diagnostics. Already stopped services are unchanged.",
+      "Verifies process shutdown and unit release; clears old failed states. Cleanup or verification failures return errors. Use server_logs for diagnostics.",
     inputSchema: selectionSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   }, async input => result(() => manage(input, "stop")));

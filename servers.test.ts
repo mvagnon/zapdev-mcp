@@ -18,7 +18,12 @@ test("services return compact actions and scoped journal diagnostics", async () 
   const parentConfig = join(config, "zapdev.json");
   const stateFile = join(directory, "units.json");
   const clients: Client[] = [];
-  type Unit = { state: string; result: string; args: string[]; logs?: string; previousLogs?: string; unloaded?: boolean; journalError?: string; journalWarning?: string; exitCode?: number; statusFailures?: number };
+  type Unit = {
+    state: string; result: string; args: string[]; logs?: string; previousLogs?: string;
+    unloaded?: boolean; journalError?: string; journalWarning?: string; exitCode?: number; statusFailures?: number;
+    runCount?: number; stopError?: string; resetError?: string; retainUnit?: boolean;
+    remainingPid?: number; remainingControlPid?: number; remainingTasks?: number; stopState?: string; missingPid?: boolean;
+  };
   type Service = {
     id: string; name: string; path: string; state: string; exitCode?: number;
     error?: string; logs?: string; truncated?: boolean;
@@ -65,11 +70,27 @@ if (args.includes("show")) {
   console.log("SubState=" + (unit?.state === "active" ? "running" : "dead"));
   console.log("Result=" + (unit?.result ?? "success"));
   console.log("ExecMainStatus=" + (unit?.exitCode ?? (unit?.result === "exit-code" ? 1 : 0)));
+  if (!unit?.missingPid) console.log("MainPID=" + (unit?.remainingPid ?? (unit?.state === "active" ? 123 : 0)));
+  console.log("ControlPID=" + (unit?.remainingControlPid ?? 0));
+  console.log("TasksCurrent=" + (unit?.remainingTasks ?? (unit?.state === "active" ? 2 : 0)));
+  console.log("ControlGroup=" + (unit?.state === "active" || unit?.remainingTasks ? "/user.slice/" + id : ""));
   process.exit(unit && !unit.unloaded ? 0 : 4);
 }
 if (args.includes("stop") && unit) {
-  unit.result = unit.args.some(arg => arg.includes("fail-stop")) ? "exit-code" : "success";
-  unit.state = unit.result === "success" ? "inactive" : "failed";
+  if (unit.stopError) { console.error(unit.stopError); process.exit(1); }
+  if (unit.state !== "failed") {
+    unit.result = unit.args.some(arg => arg.includes("fail-stop")) ? "exit-code" : "success";
+    unit.state = unit.stopState ?? (unit.result === "success" ? "inactive" : "failed");
+  }
+  unit.unloaded = unit.state === "inactive" && !unit.retainUnit && !unit.remainingPid && !unit.remainingControlPid && !unit.remainingTasks;
+  fs.writeFileSync(file, JSON.stringify(units));
+}
+if (args.includes("reset-failed") && unit) {
+  if (unit.resetError) { console.error(unit.resetError); process.exit(1); }
+  unit.state = "inactive";
+  unit.result = "success";
+  unit.exitCode = 0;
+  unit.unloaded = !unit.retainUnit && !unit.remainingPid && !unit.remainingControlPid && !unit.remainingTasks;
   fs.writeFileSync(file, JSON.stringify(units));
 }
 `, { mode: 0o755 });
@@ -79,9 +100,9 @@ const args = process.argv.slice(2);
 const file = process.env.TEST_UNITS;
 const units = JSON.parse(fs.readFileSync(file, "utf8"));
 const id = args.find(arg => arg.startsWith("--unit=")).slice(7);
-if (units[id]?.state === "active") process.exit(1);
+if (units[id] && !units[id].unloaded) { console.error("Unit already exists"); process.exit(1); }
 const failed = args.at(-1).includes("fail-start");
-units[id] = { state: failed ? "failed" : "active", result: failed ? "exit-code" : "success", args };
+units[id] = { state: failed ? "failed" : "active", result: failed ? "exit-code" : "success", args, runCount: (units[id]?.runCount ?? 0) + 1 };
 if (args.at(-1).includes("fail-later")) units[id].exitAt = Date.now() + 150;
 if (failed) units[id].logs = "Backend startup failed\\n";
 fs.writeFileSync(file, JSON.stringify(units));
@@ -149,6 +170,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.ok(args.includes("--user"));
     assert.ok(args.includes("--property=KillMode=control-group"));
     assert.ok(args.includes("--property=KillSignal=SIGINT"));
+    assert.ok(args.includes("--property=SendSIGKILL=yes"));
     assert.ok(args.includes("--property=TimeoutStopSec=30s"));
     assert.ok(args.includes("--setenv=PATH"));
     assert.equal(args.at(-1), "printf 'hello $$HOME %s\\n'");
@@ -309,9 +331,46 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.state, "failed");
     assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.exitCode, 1);
     assert.equal((failedLogs.structuredContent?.services as Service[])[0]?.logs, logLine("Backend runtime failure"));
+    const stoppedFailure = await client.callTool({ name: "stop_server", arguments: { path: group, service: "good" } });
+    assert.notEqual(stoppedFailure.isError, true, JSON.stringify(stoppedFailure.content));
+    assert.deepEqual(stoppedFailure.structuredContent, { path: group, services: [{ name: "good", path: group, state: "inactive" }] });
+    assert.equal(units()[running.id]!.unloaded, true);
+    const stoppedFailureLogs = await client.callTool({ name: "server_logs", arguments: { path: group, service: "good" } });
+    assert.equal((stoppedFailureLogs.structuredContent?.services as Service[])[0]?.logs, logLine("Backend runtime failure"));
+    const restarted = await client.callTool({ name: "start_server", arguments: { path: group, service: "good" } });
+    assert.notEqual(restarted.isError, true, JSON.stringify(restarted.content));
+    assert.equal((restarted.structuredContent?.services as Service[])[0]?.state, "active");
+    assert.equal(units()[running.id]!.runCount, 2);
+    const freshLogs = await client.callTool({ name: "server_logs", arguments: { path: group, service: "good" } });
+    assert.doesNotMatch((freshLogs.structuredContent?.services as Service[])[0]?.logs ?? "", /Backend runtime failure/);
+    const healthy = units()[running.id]!;
+    for (const scenario of [
+      { overrides: { stopState: "active" }, error: /Could not stop service good.*active/ },
+      { overrides: { remainingPid: 456 }, error: /Could not stop service good.*MainPID=456/ },
+      { overrides: { remainingControlPid: 789 }, error: /Could not stop service good.*ControlPID=789/ },
+      { overrides: { remainingTasks: 1 }, error: /Could not stop service good.*TasksCurrent=1/ },
+      { overrides: { retainUnit: true, missingPid: true }, error: /Could not verify.*MainPID/ },
+      { overrides: { state: "failed", result: "exit-code", resetError: "Reset denied" }, error: /Reset denied/ },
+      { overrides: { retainUnit: true }, error: /Could not release.*good/ },
+      { overrides: { state: "failed", result: "exit-code", retainUnit: true }, error: /Could not release.*good/ },
+      { overrides: { stopError: "Stop denied" }, error: /Stop denied/ },
+    ]) {
+      const state = units();
+      state[running.id] = { ...healthy, ...scenario.overrides };
+      writeFileSync(stateFile, JSON.stringify(state));
+      const response = await client.callTool({ name: "stop_server", arguments: { path: group, service: "good" } });
+      assert.equal(response.isError, true, JSON.stringify(response.content));
+      assert.match((response.structuredContent?.services as Service[])[0]?.error ?? "", scenario.error);
+    }
+    const state = units();
+    state[running.id] = healthy;
+    writeFileSync(stateFile, JSON.stringify(state));
     const failedStop = await client.callTool({ name: "stop_server", arguments: { path: group, service: "cleanup" } });
     assert.equal(failedStop.isError, true);
-    assert.equal((failedStop.structuredContent?.services as Service[])[0]?.state, "failed");
+    assert.equal((failedStop.structuredContent?.services as Service[])[0]?.state, "inactive");
+    assert.match((failedStop.structuredContent?.services as Service[])[0]?.error ?? "", /stop failed.*exit-code/);
+    const cleanup = Object.values(units()).find(unit => unit.args.some(arg => arg.includes("fail-stop")))!;
+    assert.equal(cleanup.unloaded, true);
 
     for (const services of [[], { "../bad": { startCommand: "echo bad" } }, { api: { startCommand: " " } },
       { api: { startCommand: "echo ok", stopCommand: " " } }]) {

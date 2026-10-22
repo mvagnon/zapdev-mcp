@@ -307,11 +307,17 @@ Accepts the same optional `path` (default server cwd) and `service` as `start_se
 Sends SIGINT to all processes in the unit.
 After 30 seconds, remaining processes receive SIGKILL.
 The optional `stopCommand` then runs with its own 30-second timeout.
-Stopped or absent units are unchanged.
+Verifies that systemd reports no main process, control process, or remaining tasks before releasing the unit.
+Missing process-accounting information fails verification when a control group still exists.
+An old `failed` state is cleared with a unit-scoped `reset-failed`, allowing a fresh start.
+Waits up to two additional seconds for the transient unit to unload; a retained unit is an error, not a successful stop.
+Absent units are unchanged.
 Unrelated systemd units cannot be selected.
+Verification covers the selected systemd units; detached external services still require a working `stopCommand`.
 
 Returns the same compact summary as `start_server`.
 Failed cleanup is reported even if the application has stopped.
+Cleanup failures remain errors even when the unit has been released successfully.
 No logs are read and no Git changes are made.
 Use `server_logs` for details.
 
@@ -335,6 +341,7 @@ Logs remain readable after service stops and MCP restarts until journal retentio
 | `lines`   | No       | Last lines per service; defaults to 100, maximum 1000              |
 
 Returns service identity, unit `id`, state, result, `exitCode`, `logs`, and `truncated`.
+Systemd process diagnostics (`mainPid`, `controlPid`, `tasks`, and `controlGroup`) are included when available.
 Failed services remain marked as errors alongside their logs.
 Responses contain at most the last 64 KiB per service.
 ANSI control sequences are removed.

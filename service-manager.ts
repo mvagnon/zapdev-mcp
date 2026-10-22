@@ -13,8 +13,12 @@ export type Service = { name: string; path: string; startCommand: string; stopCo
 export type ServiceResult = {
   name: string; path: string; id: string; state?: string; subState?: string;
   result?: string; exitCode?: number; exists?: boolean; logs?: string; truncated?: boolean; error?: string;
+  mainPid?: number; controlPid?: number; tasks?: number; controlGroup?: string;
 };
-type Status = { state: string; subState: string; result: string; exitCode: number; exists: boolean };
+type Status = {
+  state: string; subState: string; result: string; exitCode: number; exists: boolean;
+  mainPid?: number; controlPid?: number; tasks?: number; controlGroup?: string;
+};
 type Logs = { logs: string; truncated: boolean; error?: string };
 
 async function systemd(command: string, args: string[], timeout = 15_000): Promise<string> {
@@ -34,17 +38,23 @@ async function systemd(command: string, args: string[], timeout = 15_000): Promi
 
 async function status(id: string): Promise<Status> {
   const output = await systemd("systemctl", [
-    "show", "--property=LoadState,ActiveState,SubState,Result,ExecMainStatus", id,
+    "show", "--all", "--property=LoadState,ActiveState,SubState,Result,ExecMainStatus,MainPID,ControlPID,TasksCurrent,ControlGroup", id,
   ]);
   const fields = Object.fromEntries(output.trim().split("\n").map(line => {
     const index = line.indexOf("=");
     return [line.slice(0, index), line.slice(index + 1)];
   }));
   if (!fields.LoadState || !fields.ActiveState) throw new Error(`Could not read systemd state for ${id}.`);
+  const exists = fields.LoadState !== "not-found";
+  const tasks = Number(fields.TasksCurrent);
   return {
     state: fields.ActiveState, subState: fields.SubState ?? "dead",
     result: fields.Result || "success", exitCode: Number(fields.ExecMainStatus || 0),
-    exists: fields.LoadState !== "not-found",
+    exists,
+    mainPid: exists ? (fields.MainPID === undefined ? undefined : Number(fields.MainPID)) : 0,
+    controlPid: exists ? (fields.ControlPID === undefined ? undefined : Number(fields.ControlPID)) : 0,
+    tasks: Number.isSafeInteger(tasks) && tasks >= 0 ? tasks : undefined,
+    controlGroup: exists ? fields.ControlGroup : "",
   };
 }
 
@@ -93,7 +103,7 @@ async function start(service: Service, id: string, current: Status): Promise<Sta
     await systemd("systemd-run", [
       "--quiet", `--unit=${id}`, "--service-type=exec", "--remain-after-exit",
       `--working-directory=${service.path}`, "--property=KillMode=control-group",
-      "--property=KillSignal=SIGINT",
+      "--property=KillSignal=SIGINT", "--property=SendSIGKILL=yes",
       "--property=TimeoutStopSec=30s", "--property=StandardOutput=journal",
       "--property=StandardError=journal",
       ...(service.stopCommand === undefined ? [] : [
@@ -116,6 +126,33 @@ async function start(service: Service, id: string, current: Status): Promise<Sta
   return observed;
 }
 
+async function stop(service: Service, id: string, current: Status): Promise<Status> {
+  if (!current.exists) return current;
+  await systemd("systemctl", ["stop", id], 75_000);
+  let stopped = await status(id);
+  if (stopped.exists && (!Number.isSafeInteger(stopped.mainPid) || !Number.isSafeInteger(stopped.controlPid) ||
+    stopped.controlGroup === undefined || (stopped.controlGroup !== "" && stopped.tasks === undefined))) {
+    throw new Error(`Could not verify stop for service ${service.name}: missing or invalid MainPID, ControlPID, TasksCurrent or ControlGroup.`);
+  }
+  if (!["inactive", "failed"].includes(stopped.state) || stopped.mainPid !== 0 || stopped.controlPid !== 0 ||
+    (stopped.tasks ?? 0) > 0) {
+    throw new Error(`Could not stop service ${service.name}: state=${stopped.state}, MainPID=${stopped.mainPid}, ControlPID=${stopped.controlPid}, TasksCurrent=${stopped.tasks ?? "unknown"}; processes may remain.`);
+  }
+  const failure = current.state !== "failed" && (stopped.state === "failed" || stopped.result !== "success")
+    ? `Service ${service.name} stop failed (${stopped.result}); unit released, inspect server_logs for shutdown or stopCommand diagnostics.` : undefined;
+  if (stopped.exists && stopped.state === "failed") await systemd("systemctl", ["reset-failed", id]);
+  const deadline = Date.now() + 2_000;
+  while (stopped.exists && Date.now() < deadline) {
+    await delay(100);
+    stopped = await status(id);
+  }
+  if (stopped.exists || stopped.state !== "inactive" || stopped.mainPid !== 0 || stopped.controlPid !== 0 || stopped.controlGroup !== "") {
+    throw new Error(`Could not release systemd unit for service ${service.name} (${id}): state=${stopped.state}, MainPID=${stopped.mainPid}, ControlPID=${stopped.controlPid}, ControlGroup=${stopped.controlGroup ?? "unknown"}; stop is not verified and restart is not safe.`);
+  }
+  if (failure) throw new Error(failure);
+  return stopped;
+}
+
 /** Manage one isolated systemd user unit, preserving partial results and logs across MCP restarts. */
 export async function runService(service: Service, action: "start" | "stop" | "logs", lines = 100): Promise<ServiceResult> {
   const hash = createHash("sha256").update(realpathSync(service.path)).update("\0").update(service.name).digest("hex").slice(0, 16);
@@ -125,10 +162,7 @@ export async function runService(service: Service, action: "start" | "stop" | "l
   try {
     current = await status(id);
     if (action === "start") current = await start(service, id, current);
-    else if (action === "stop" && current.exists) {
-      await systemd("systemctl", ["stop", id], 75_000);
-      current = await status(id);
-    }
+    else if (action === "stop") current = await stop(service, id, current);
   } catch (error) {
     current = await status(id).catch(() => undefined);
     if (action !== "logs" || !current) output.error = error instanceof Error ? error.message : String(error);
