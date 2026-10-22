@@ -11,9 +11,9 @@ test("services return compact actions and scoped journal diagnostics", async () 
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-services-test-")));
   const root = join(directory, "repos");
   const group = join(root, "my-group");
-  const first = join(group, "owner$first");
-  const second = join(group, "owner$second");
-  const standalone = join(root, "owner$first");
+  const first = join(group, "owner__first");
+  const second = join(group, "owner__second");
+  const standalone = join(root, "owner__first");
   const config = join(directory, ".zapdev", "config", "my-group");
   const parentConfig = join(config, "zapdev.json");
   const stateFile = join(directory, "units.json");
@@ -109,10 +109,10 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
       writeFileSync(join(path, "AGENTS.md"), "Repository instructions");
     }
     mkdirSync(join(group, "not-a-repository"));
-    mkdirSync(join(config, "owner$first"), { recursive: true });
-    mkdirSync(join(config, "owner$second"));
-    mkdirSync(join(directory, ".zapdev", "config", "owner$first"));
-    writeFileSync(join(directory, ".zapdev", "config", "owner$first", "zapdev.json"), JSON.stringify({
+    mkdirSync(join(config, "owner__first"), { recursive: true });
+    mkdirSync(join(config, "owner__second"));
+    mkdirSync(join(directory, ".zapdev", "config", "owner__first"));
+    writeFileSync(join(directory, ".zapdev", "config", "owner__first", "zapdev.json"), JSON.stringify({
       services: { backend: { startCommand: "npm run standalone" } },
     }));
     writeFileSync(join(group, "AGENTS.md"), "Parent instructions");
@@ -120,7 +120,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
       frontUrl: "http://localhost:3000",
       services: { frontend: { startCommand: "printf 'hello $HOME %s\\n'", stopCommand: "printf 'stop $HOME'" } },
     }));
-    for (const name of ["owner$first", "owner$second"]) {
+    for (const name of ["owner__first", "owner__second"]) {
       writeFileSync(join(config, name, "zapdev.json"), JSON.stringify({
         apiUrl: "http://localhost:4000",
         services: { backend: { startCommand: "npm run dev" } },

@@ -43,7 +43,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     }
 
     for (const group of [undefined, "my-group", "other-group"]) {
-      const expected = join(root, ...(group ? [group] : []), "owner$repo");
+      const expected = join(root, ...(group ? [group] : []), "owner__repo");
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = await client.callTool({
           name: "prepare_repo",
@@ -62,23 +62,23 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "" },
     });
     assert.notEqual(rootWithEmptyGroup.isError, true, JSON.stringify(rootWithEmptyGroup.content));
-    assert.deepEqual(rootWithEmptyGroup.structuredContent, { path: join(root, "owner$repo") });
+    assert.deepEqual(rootWithEmptyGroup.structuredContent, { path: join(root, "owner__repo") });
 
     const secrets = join(directory, ".zapdev", "secrets");
     const groupSecrets = join(secrets, "my-group");
-    const repoSecrets = join(groupSecrets, "owner$repo");
+    const repoSecrets = join(groupSecrets, "owner__repo");
     mkdirSync(join(repoSecrets, "nested"), { recursive: true });
-    mkdirSync(join(groupSecrets, "other$repo"));
-    mkdirSync(join(secrets, "owner$repo"));
+    mkdirSync(join(groupSecrets, "other__repo"));
+    mkdirSync(join(secrets, "owner__repo"));
     writeFileSync(join(groupSecrets, "config.json"), '{"group":true}');
-    writeFileSync(join(groupSecrets, "other$repo", ".env"), "OTHER=private");
+    writeFileSync(join(groupSecrets, "other__repo", ".env"), "OTHER=private");
     writeFileSync(join(repoSecrets, ".env"), "GROUP=private");
     writeFileSync(join(repoSecrets, "nested", "key.pem"), "nested private key");
-    writeFileSync(join(secrets, "owner$repo", ".env.local"), "LOCAL=private");
+    writeFileSync(join(secrets, "owner__repo", ".env.local"), "LOCAL=private");
     writeFileSync(join(root, "my-group", "config.json"), "old copied secret");
 
     for (const group of [undefined, "my-group", "other-group"]) {
-      const expected = join(root, ...(group ? [group] : []), "owner$repo");
+      const expected = join(root, ...(group ? [group] : []), "owner__repo");
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = await client.callTool({
           name: "prepare_repo",
@@ -89,7 +89,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
         assert.equal(existsSync(join(expected, ".env")), group === "my-group");
         if (group === undefined) {
           assert.equal(readFileSync(join(expected, ".env.local"), "utf8"), "LOCAL=private");
-          assert.equal(readlinkSync(join(expected, ".env.local")), join(secrets, "owner$repo", ".env.local"));
+          assert.equal(readlinkSync(join(expected, ".env.local")), join(secrets, "owner__repo", ".env.local"));
         }
         if (group === "my-group") {
           assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), '{"group":true}');
@@ -99,7 +99,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
           assert.equal(readFileSync(join(expected, "nested", "key.pem"), "utf8"), "nested private key");
           assert.equal(readlinkSync(join(expected, ".env")), join(repoSecrets, ".env"));
           assert.equal(readlinkSync(join(expected, "nested", "key.pem")), join(repoSecrets, "nested", "key.pem"));
-          assert.equal(existsSync(join(root, group, "other$repo")), false);
+          assert.equal(existsSync(join(root, group, "other__repo")), false);
           writeFileSync(join(repoSecrets, ".env"), "GROUP=updated");
           assert.equal(readFileSync(join(expected, ".env"), "utf8"), "GROUP=updated");
           writeFileSync(join(expected, ".env"), "GROUP=private");
@@ -110,23 +110,23 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     }
 
     const config = join(directory, ".zapdev", "config");
-    const standaloneConfig = join(config, "owner$repo", "zapdev.json");
+    const standaloneConfig = join(config, "owner__repo", "zapdev.json");
     const parentConfig = join(config, "my-group", "zapdev.json");
-    const childConfig = join(config, "my-group", "owner$repo", "zapdev.json");
-    mkdirSync(join(config, "owner$repo"), { recursive: true });
-    mkdirSync(join(config, "my-group", "owner$repo"), { recursive: true });
+    const childConfig = join(config, "my-group", "owner__repo", "zapdev.json");
+    mkdirSync(join(config, "owner__repo"), { recursive: true });
+    mkdirSync(join(config, "my-group", "owner__repo"), { recursive: true });
     writeFileSync(standaloneConfig, JSON.stringify({
       prepareCommand: "test -L .env.local && test -f AGENTS.md && printf standalone > prepared",
     }));
     writeFileSync(parentConfig, JSON.stringify({
-      prepareCommand: "test -L 'owner$repo/.env' && test -f 'owner$repo/AGENTS.md' && printf parent > prepared",
+      prepareCommand: "test -L 'owner__repo/.env' && test -f 'owner__repo/AGENTS.md' && printf parent > prepared",
     }));
     writeFileSync(childConfig, JSON.stringify({
       prepareCommand: "test -L .env && test -L ../config.json && printf child > prepared",
     }));
     for (const group of [undefined, "my-group"]) {
       const parent = join(root, ...(group ? [group] : []));
-      const path = join(parent, "owner$repo");
+      const path = join(parent, "owner__repo");
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = await client.callTool({
           name: "prepare_repo", arguments: { repo: "owner/repo", ...(group && { group }) },
@@ -143,10 +143,10 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.notEqual(fallback.isError, true, JSON.stringify(fallback.content));
-    assert.equal(readFileSync(join(root, "my-group", "owner$repo", "prepared"), "utf8"), "child");
+    assert.equal(readFileSync(join(root, "my-group", "owner__repo", "prepared"), "utf8"), "child");
 
     const groupPath = join(root, "my-group");
-    writeFileSync(join(groupPath, "owner$repo", "AGENTS.md"), "Grouped changes must stay untouched");
+    writeFileSync(join(groupPath, "owner__repo", "AGENTS.md"), "Grouped changes must stay untouched");
     mkdirSync(join(root, "empty"));
     for (const input of [
       {},
@@ -160,7 +160,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     ]) {
       assert.equal((await client.callTool({ name: "prepare_repo", arguments: input })).isError, true);
     }
-    assert.equal(readFileSync(join(groupPath, "owner$repo", "AGENTS.md"), "utf8"), "Grouped changes must stay untouched");
+    assert.equal(readFileSync(join(groupPath, "owner__repo", "AGENTS.md"), "utf8"), "Grouped changes must stay untouched");
     assert.equal(existsSync(join(groupPath, "prepared")), false);
 
     writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf 'prepare failed' >&2; exit 1" }));
@@ -193,7 +193,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.equal(unsafeMetadata.isError, true);
-    execFileSync("git", ["-C", join(root, "my-group", "owner$repo"), "rev-parse", "HEAD"]);
+    execFileSync("git", ["-C", join(root, "my-group", "owner__repo"), "rev-parse", "HEAD"]);
 
     for (const group of [".", "..", "../outside", "/absolute", "nested/group", "nested\\group", "bad\0name"]) {
       const result = await client.callTool({
@@ -209,7 +209,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       arguments: { repo: "owner/repo", group: "linked-group" },
     });
     assert.equal(result.isError, true);
-    assert.equal(existsSync(join(source, "owner$repo")), false);
+    assert.equal(existsSync(join(source, "owner__repo")), false);
   } finally {
     await client.close();
     rmSync(directory, { recursive: true, force: true });

@@ -56,7 +56,7 @@ async function prepareCommand(root: string, path: string): Promise<void> {
 
 async function prepareRepository(root: string, repo: string, group?: string, branch?: string): Promise<{ path: string }> {
   const parent = group === undefined ? root : join(root, group);
-  const checkoutName = repo.replace("/", "$");
+  const checkoutName = repo.replace("/", "__");
   const path = join(parent, checkoutName);
   const directories = process.env.ZD_REPOS_DIR ? [root, parent] : [join(home, ".zapdev"), root, parent];
   for (const directory of directories) ensureDirectory(directory);
