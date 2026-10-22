@@ -104,15 +104,17 @@ The server runs on the client's host, not in a sandbox.
 
 ### `prepare_repo`
 
-Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>-<repo>`.
+Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>$<repo>`.
 
 Set `ZD_REPOS_DIR` to an absolute path to change the checkout root.
-For example, `ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner-repo`.
+For example, `ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner$repo`.
 Unset or empty values use the default.
 Use a full path, not a literal `~`.
 
-With `group: "my-group"`, the checkout lives in `<ZD_REPOS_DIR>/my-group/owner-repo`.
+With `group: "my-group"`, the checkout lives in `<ZD_REPOS_DIR>/my-group/owner$repo`.
 Other checkouts are not moved or deleted.
+Rename existing `owner-repo` checkout, secret, and configuration folders to `owner$repo` to reuse them; no automatic migration is performed.
+Quote paths containing `$` with single quotes in shell commands to avoid variable expansion.
 
 | Argument | Required | Description                                                               |
 | -------- | -------- | ------------------------------------------------------------------------- |
@@ -141,8 +143,8 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | Source under `~/.zapdev/secrets/` | Destination under `ZD_REPOS_DIR`          |
 | --------------------------------- | ----------------------------------------- |
 | `my-group/config.json`            | `my-group/config.json`                    |
-| `my-group/owner-repo/.env`        | `my-group/owner-repo/.env`                |
-| `owner-repo/.env.local`           | `owner-repo/.env.local` (without `group`) |
+| `my-group/owner$repo/.env`        | `my-group/owner$repo/.env`                |
+| `owner$repo/.env.local`           | `owner$repo/.env.local` (without `group`) |
 
 With `repo + group`, both group-root files and repository secrets are linked before the checkout prepare command.
 Group-root secrets stay in the group directory, never in child checkouts.
@@ -174,9 +176,9 @@ They are not copied or symlinked into checkouts.
 
 | Configuration path                                 | Applies to                |
 | -------------------------------------------------- | ------------------------- |
-| `~/.zapdev/config/owner-repo/zapdev.json`          | Standalone repository     |
+| `~/.zapdev/config/owner$repo/zapdev.json`          | Standalone repository     |
 | `~/.zapdev/config/my-group/zapdev.json`            | Group (parent)            |
-| `~/.zapdev/config/my-group/owner-repo/zapdev.json` | Repository inside a group |
+| `~/.zapdev/config/my-group/owner$repo/zapdev.json` | Repository inside a group |
 
 Copy this template to the applicable location and adapt the commands and URLs:
 
@@ -254,7 +256,7 @@ Call `prepare_repo` first.
 With `ZD_REPOS_DIR=/srv/repos`:
 
 - `{}` uses the server's current directory.
-- `{"path":"/srv/repos/my-group/owner-repo"}` selects one checkout.
+- `{"path":"/srv/repos/my-group/owner$repo"}` selects one checkout.
 - `{"path":"/srv/repos/my-group"}` selects the whole group.
 
 A subdirectory inside a checkout resolves to its root.
@@ -337,7 +339,7 @@ Nonzero `journalctl` exits report reading errors.
 Nonfatal warnings do not fail a successful query.
 Logs may contain application secrets; do not share them without review.
 
-Example: `{"path":"/srv/repos/my-group/owner-repo","service":"frontend","lines":50}`.
+Example: `{"path":"/srv/repos/my-group/owner$repo","service":"frontend","lines":50}`.
 
 ### `commit`
 
