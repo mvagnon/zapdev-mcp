@@ -114,15 +114,20 @@ To use a local build, run `npm run build`, then configure your MCP client with
 
 ### `get_repo`
 
-Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>/<repo>`.
+Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>-<repo>`.
 
 Set `ZD_REPOS_DIR` to an absolute path to override the root directory. For example,
-`ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner/repo`.
+`ZD_REPOS_DIR=/srv/repos` places `owner/repo` in `/srv/repos/owner-repo`.
 An unset or empty value uses the default. Use a full path, not a literal `~`.
+
+With `group: "my-group"`, the checkout is placed in
+`<ZD_REPOS_DIR>/my-group/owner-repo`. Existing `<owner>/<repo>` checkouts are not
+moved or deleted.
 
 | Argument | Required | Description                                                         |
 | -------- | -------- | ------------------------------------------------------------------- |
 | `repo`   | Yes      | GitHub repository as `owner/repo`                                   |
+| `group`  | No       | Group folder under the repositories root; a single name, not a path |
 | `branch` | No       | Remote branch to check out; defaults to the remote's default branch |
 
 Returns the absolute checkout `path` and `agents_md` containing the root

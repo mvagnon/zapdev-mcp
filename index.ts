@@ -84,8 +84,9 @@ server.registerTool(
   "get_repo",
   {
     description:
-      "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>/<repo> " +
-      "(defaults to ~/.zapdev/repos/<owner>/<repo>). " +
+      "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>-<repo> " +
+      "(defaults to ~/.zapdev/repos/<owner>-<repo>). " +
+      "When group is supplied, place the checkout in <ZD_REPOS_DIR>/<group>/<owner>-<repo>. " +
       "Returns its absolute path and root AGENTS.md contents when present. " +
       "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
       "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
@@ -101,6 +102,12 @@ server.registerTool(
               !["", ".", ".."].includes(value.slice(value.indexOf("/") + 1)),
           )
           .describe("GitHub repository as owner/repo."),
+        group: z
+          .string()
+          .regex(/^[^/\\\0]+$/)
+          .refine((value) => ![".", ".."].includes(value))
+          .optional()
+          .describe("Optional group folder inside ZD_REPOS_DIR; a single directory name, not a path."),
         branch: z
           .string()
           .optional()
@@ -109,7 +116,7 @@ server.registerTool(
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
-  async ({ repo, branch }) => {
+  async ({ repo, group, branch }) => {
     try {
       if (branch) await git(home, "check-ref-format", "--branch", branch);
       const owner = repo.slice(0, repo.indexOf("/"));
@@ -118,8 +125,9 @@ server.registerTool(
       if (!isAbsolute(root)) {
         throw new Error("ZD_REPOS_DIR must be an absolute path.");
       }
-      const parent = join(root, owner);
-      const path = join(parent, name);
+      const parent = group === undefined ? root : join(root, group);
+      const checkoutName = `${owner}-${name}`;
+      const path = join(parent, checkoutName);
       const directories = process.env.ZD_REPOS_DIR
         ? [root, parent]
         : [join(home, ".zapdev"), root, parent];
@@ -127,7 +135,7 @@ server.registerTool(
         ensureDirectory(directory);
       }
 
-      const lock = join(root, `.${owner}_${name}.lock`);
+      const lock = join(parent, `.${checkoutName}.lock`);
       mkdirSync(lock);
       try {
         const entry = lstatSync(path, { throwIfNoEntry: false });
