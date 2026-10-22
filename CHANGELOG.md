@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.1](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.0...v2.2.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* Require repo for prepare_repo and simplify preparation flow. ([442603d](https://github.com/mvagnon/zapdev-mcp/commit/442603da18bfc4aa7fdbc14de36617b8d8aee3ef))
+* **service-manager:** Improve error handling for service status checks and preserve failures. ([ed438c2](https://github.com/mvagnon/zapdev-mcp/commit/ed438c25706525f55d188054dc8141f91e4f5bab))
+
 ## [2.2.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.1.1...v2.2.0) (2026-10-22)
 
 
