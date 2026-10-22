@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.4](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.3...v2.2.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* Verify complete shutdown and unit release; clear old failed state and expose cleanup/verification failures as errors. ([0fad9df](https://github.com/mvagnon/zapdev-mcp/commit/0fad9df78545db63228aa5441832c8ee0e4c804d))
+
 ## [2.2.3](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.2...v2.2.3) (2026-10-22)
 
 
