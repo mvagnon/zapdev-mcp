@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.2.1...v1.3.0) (2026-10-22)
+
+
+### Features
+
+* **secrets:** Link matching files from ~/.zapdev/secrets into the group root after refresh. ([950efa3](https://github.com/mvagnon/zapdev-mcp/commit/950efa3f673605a509cf03b260cab4932b454af0))
+
 ## [1.2.1](https://github.com/mvagnon/zapdev-mcp/compare/v1.2.0...v1.2.1) (2026-10-22)
 
 
