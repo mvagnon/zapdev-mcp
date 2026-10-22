@@ -105,8 +105,8 @@ async function result(action: () => Promise<Record<string, unknown> & { services
 const selectionSchema = z.object({
   path: z.string().optional().transform(value => value === "" ? undefined : value)
     .refine(value => value === undefined || isAbsolute(value), "Expected an absolute checkout or group path.")
-    .describe("Optional absolute path inside ZD_REPOS_DIR. Defaults to the MCP server's working directory, not the client's active folder; empty means omitted. A path inside a checkout selects that repo; a group directory selects its services and all immediate child checkouts."),
-  service: serviceNameSchema.optional().describe("Optional configured service name; otherwise selects all services."),
+    .describe("Absolute checkout/group path in ZD_REPOS_DIR (no ~). Default: server cwd. A group includes its immediate child repos."),
+  service: serviceNameSchema.optional().describe("Service name; omitted selects all."),
 }).strict();
 
 /** Register named service startup, shutdown, and bounded log tools for prepared repositories and groups. */
@@ -115,18 +115,9 @@ export function registerServerTools(server: McpServer): void {
     "start_server",
     {
       description:
-        "Start an already prepared repository or group without running Git operations. " +
-        "Supply optional path, otherwise uses the MCP server's working directory (not the client's active folder). Empty path means omitted. " +
-        "Paths must be inside ZD_REPOS_DIR; a path inside a checkout selects that repo, a group directory selects the group and all immediate child checkouts. " +
-        "Requires Linux and a running systemd user manager. Reads named services from ~/.zapdev/config. " +
-        "Each service gets an independent systemd user unit and persistent logs; no PIDs to manage. " +
-        "Already active services are reused; failed services return errors until stopped. " +
-        "Observes new services for up to one second to detect immediate failures, including their latest logs on errors. " +
-        "Returns service names, stable unit IDs and observed systemd states, not readiness guarantees. " +
-        "Returns root AGENTS.md and URLs, plus every immediate child checkout's instructions and URLs for a group. " +
-        "A single grouped repository also includes its parent's instructions and URLs under parent. " +
-        "Parent instructions take priority over child instructions; parent URLs override matching child fields. " +
-        "Missing URLs are omitted. Partial successes are preserved in the response; inspect per-service errors.",
+        "Start configured services using Linux/systemd; reuse active units. " +
+        "Returns state, AGENTS.md and URLs (parent priority), not readiness guarantees. " +
+        "Failures include logs; stop failed units before restarting.",
       inputSchema: selectionSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
@@ -140,12 +131,8 @@ export function registerServerTools(server: McpServer): void {
 
   server.registerTool("stop_server", {
     description:
-      "Stop named services in a prepared repository or group using systemd --user. " +
-      "Uses the same optional path/server cwd and service filter as start_server. " +
-      "First sends SIGINT (Ctrl-C) to all processes in the unit, waiting up to 30 seconds before SIGKILL. " +
-      "Then runs the optional stopCommand as cleanup, with its own 30-second systemd timeout. " +
-      "Already stopped services are unchanged. Returns final states, errors and bounded final logs. " +
-      "Never operates on arbitrary PIDs or unrelated systemd units. Makes no Git changes.",
+      "Stop services via Linux/systemd: SIGINT, then SIGKILL after 30s, then optional cleanup. " +
+      "Returns final state, errors and logs. Already stopped services are unchanged.",
     inputSchema: selectionSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   }, async input => result(async () => {
@@ -157,12 +144,8 @@ export function registerServerTools(server: McpServer): void {
 
   server.registerTool("server_logs", {
     description:
-      "Read stdout/stderr and systemd diagnostics from the user journal for named services in a prepared repository or group. " +
-      "Uses the same optional path/server cwd and service filter as start_server. " +
-      "Returns current systemd states, exit codes and the last lines (default 100, maximum 1000), capped at 64 KiB per service, without streaming. " +
-      "ANSI control sequences are removed; truncated indicates omitted older content. " +
-      "Requires journalctl and readable user journals; access errors are reported, not hidden as empty logs. " +
-      "Journal retention follows host configuration. Existing file-backed units and archived files remain readable. Logs may contain application secrets.",
+      "Read stdout/stderr and systemd diagnostics from journald; requires a readable Linux user journal. " +
+      "Returns current state, exit codes and logs (up to 64 KiB/service). Logs may contain secrets.",
     inputSchema: selectionSchema.extend({ lines: z.number().int().min(1).max(1000).default(100) }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   }, async input => result(async () => {

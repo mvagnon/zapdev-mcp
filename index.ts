@@ -50,7 +50,7 @@ async function zapdev(path: string, args: string[], branch?: string): Promise<Ca
 const repositoryPath = z
   .string()
   .refine(isAbsolute, "Expected an absolute repository path.")
-  .describe("Absolute path inside the Git repository.");
+  .describe("Absolute Git repository path (no ~).");
 
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
@@ -58,27 +58,15 @@ server.registerTool(
   "prepare_repo",
   {
     description:
-      "Clone or refresh a GitHub repository in <ZD_REPOS_DIR>/<owner>-<repo> " +
-      "(defaults to ~/.zapdev/repos/<owner>-<repo>). " +
-      "When group is supplied, place the checkout in <ZD_REPOS_DIR>/<group>/<owner>-<repo>. " +
-      "repo and group are individually optional; omitted or empty strings are ignored, but at least one must be nonempty. " +
-      "Supply group alone to refresh all existing immediate child checkouts, without cloning new repositories. " +
-      "With repo, links matching checkout secrets from ~/.zapdev/secrets and, when grouped, group-root secrets before running only the checkout's prepareCommand. " +
-      "Group-root secrets stay in the group directory, not in child checkouts. With group alone, prepares each child and runs the group's prepareCommand once afterward. " +
-      "Secret symlinks replace matching files; keep them Git-ignored to avoid committing them. " +
-      "Edits through these links modify the source secrets. " +
-      "After linking secrets, runs the optional prepareCommand from ~/.zapdev/config and waits up to 180 seconds. " +
-      "Missing commands do nothing; failures return an error. Group preparation stops at the first failure; completed changes are not rolled back. " +
-      "Returns its absolute path, plus repositories for a whole group; use start_server for AGENTS.md instructions and configured URLs. " +
-      "Uses the remote default branch unless branch is supplied. Fails if refresh fails. " +
-      "Checkouts are disposable: overwrites tracked changes and removes untracked files, except ignored files. " +
-      "Never use for repositories containing work you want to keep.",
+      "Clone/reset disposable GitHub checkouts under ZD_REPOS_DIR (default ~/.zapdev/repos). Supply repo or group. " +
+      "Links scoped secrets and runs prepareCommand; group-only prepares existing child repos, then the group. " +
+      "Destructive: discards tracked edits and untracked non-ignored files. Editing secret symlinks changes source secrets; keep links Git-ignored.",
     inputSchema: repositorySelectionSchema
       .extend({
         branch: z
           .string()
           .optional()
-          .describe("Optional remote branch to check out in each selected repository."),
+          .describe("Remote branch; default: each repo's remote default branch."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
@@ -108,11 +96,8 @@ server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes in a local Git repository using npx --yes zapdev. " +
-      "Always uses --yes --pull --no-push; adds --branch when supplied, otherwise keeps the current branch. " +
-      "Pulls fast-forward updates when an upstream is configured; never pushes. " +
-      "Sends commit context to the configured zapdev LLM endpoint. " +
-      "Requires npx and ZD_* environment configuration; no global zapdev installation needed.",
+      "Commit all changes via npx zapdev, pulling fast-forward updates but never pushing. " +
+      "Requires ZD_* configuration; sends commit context to the configured LLM.",
     inputSchema: z
       .object({
         path: repositoryPath,
@@ -120,12 +105,12 @@ server.registerTool(
           .string()
           .min(1)
           .optional()
-          .describe("Local branch to switch to or create before committing; defaults to the current branch."),
+          .describe("Local branch to switch/create; default: current branch."),
         type: z
           .string()
           .regex(/^(auto|(?:feat|fix|deps|chore|docs|style|refactor|perf|test|build|ci|revert)!?)$/)
           .default("auto")
-          .describe("Conventional Commit type, optionally ending in !; auto lets zapdev choose."),
+          .describe("Conventional Commit type; auto chooses, ! marks breaking changes."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
@@ -140,12 +125,8 @@ server.registerTool(
   "pr",
   {
     description:
-      "Push the current branch and create a GitHub pull request using npx --yes zapdev pr --yes. " +
-      "Requires a clean working tree, npx, authenticated GitHub CLI (gh), and ZD_* configuration. " +
-      "Sends full branch commit messages to the configured LLM endpoint to generate the title. " +
-      "Builds the description from commits and optionally appends a Closes task URL. " +
-      "Never force-pushes; no global zapdev installation needed. Do not retry blindly after errors: " +
-      "the branch may already have been pushed or the PR created.",
+      "Push the branch and create a GitHub PR via npx zapdev. Requires a clean tree, gh auth and ZD_* configuration. " +
+      "Sends commit messages to the LLM. Never force-pushes; check remote state before retrying errors.",
     inputSchema: z
       .object({
         path: repositoryPath,
@@ -153,11 +134,11 @@ server.registerTool(
           .string()
           .min(1)
           .optional()
-          .describe("Target branch of the PR; defaults to the GitHub repository's default branch."),
+          .describe("PR target branch; default: repository's default branch."),
         closes: z
           .url({ protocol: /^https?$/ })
           .optional()
-          .describe("HTTP(S) PM task URL to reference as Closes in the PR description."),
+          .describe("HTTP(S) task URL to reference as Closes."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
