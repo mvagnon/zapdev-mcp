@@ -121,21 +121,23 @@ export async function runService(service: Service, action: "start" | "stop" | "l
   const hash = createHash("sha256").update(realpathSync(service.path)).update("\0").update(service.name).digest("hex").slice(0, 16);
   const id = `zapdev-${service.name}-${hash}.service`;
   const output: ServiceResult = { name: service.name, path: service.path, id };
+  let current: Status | undefined;
   try {
-    let current = await status(id);
+    current = await status(id);
     if (action === "start") current = await start(service, id, current);
     else if (action === "stop" && current.exists) {
       await systemd("systemctl", ["stop", id], 75_000);
       current = await status(id);
     }
+  } catch (error) {
+    current = await status(id).catch(() => undefined);
+    if (action !== "logs" || !current) output.error = error instanceof Error ? error.message : String(error);
+  }
+  if (current) {
     Object.assign(output, current);
     if (current.state === "failed" || current.result !== "success") {
-      output.error = `Service ${service.name} failed (${current.result}); inspect server_logs and stop it before starting again.`;
+      output.error ??= `Service ${service.name} failed (${current.result}); inspect server_logs and stop it before starting again.`;
     }
-  } catch (error) {
-    output.error = error instanceof Error ? error.message : String(error);
-    const current = await status(id).catch(() => undefined);
-    if (current) Object.assign(output, current);
   }
   if (action === "logs") {
     try {

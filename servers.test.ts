@@ -18,7 +18,7 @@ test("services return compact actions and scoped journal diagnostics", async () 
   const parentConfig = join(config, "zapdev.json");
   const stateFile = join(directory, "units.json");
   const clients: Client[] = [];
-  type Unit = { state: string; result: string; args: string[]; logs?: string; previousLogs?: string; unloaded?: boolean; journalError?: string; journalWarning?: string; exitCode?: number };
+  type Unit = { state: string; result: string; args: string[]; logs?: string; previousLogs?: string; unloaded?: boolean; journalError?: string; journalWarning?: string; exitCode?: number; statusFailures?: number };
   type Service = {
     id: string; name: string; path: string; state: string; exitCode?: number;
     error?: string; logs?: string; truncated?: boolean;
@@ -54,6 +54,12 @@ if (unit?.exitAt && Date.now() >= unit.exitAt && unit.state === "active") {
   fs.writeFileSync(file, JSON.stringify(units));
 }
 if (args.includes("show")) {
+  if (unit?.statusFailures > 0) {
+    unit.statusFailures--;
+    fs.writeFileSync(file, JSON.stringify(units));
+    console.log("LoadState=loaded");
+    process.exit(0);
+  }
   console.log("LoadState=" + (unit && !unit.unloaded ? "loaded" : "not-found"));
   console.log("ActiveState=" + (unit?.state ?? "inactive"));
   console.log("SubState=" + (unit?.state === "active" ? "running" : "dead"));
@@ -199,6 +205,24 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal((logs.structuredContent?.services as Service[])[0]?.state, "active");
     const latest = await other.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
     assert.equal((latest.structuredContent?.services as Service[])[0]?.logs, logLine("old") + logLine("first") + logLine("second"));
+    for (const scenario of [
+      { statusFailures: 1, state: "active", result: "success", expectedError: undefined },
+      { statusFailures: 2, state: "active", result: "success", expectedError: /Could not read systemd state/ },
+      { statusFailures: 1, state: "failed", result: "exit-code", expectedError: /Service frontend failed \(exit-code\)/ },
+    ]) {
+      const { expectedError, ...status } = scenario;
+      Object.assign(journal[service.id]!, status);
+      writeFileSync(stateFile, JSON.stringify(journal));
+      const response = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
+      const recovered = (response.structuredContent?.services as Service[])[0]!;
+      assert.equal(response.isError, expectedError ? true : undefined, JSON.stringify(response.content));
+      if (expectedError) assert.match(recovered.error ?? "", expectedError);
+      else assert.equal(recovered.error, undefined);
+      assert.equal(recovered.state, status.statusFailures === 2 ? undefined : status.state);
+      assert.equal(recovered.logs, logLine("old") + logLine("first") + logLine("second"));
+      assert.equal(units()[service.id]!.statusFailures, 0);
+    }
+    Object.assign(journal[service.id]!, { state: "active", result: "success", statusFailures: 0 });
     journal[service.id]!.logs = "x".repeat(500_000);
     writeFileSync(stateFile, JSON.stringify(journal));
     const bounded = await client.callTool({ name: "server_logs", arguments: { path: group } });
@@ -212,6 +236,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal((warning.structuredContent?.services as Service[])[0]?.logs, logLine("Available service logs"));
     delete journal[service.id]!.journalWarning;
     journal[service.id]!.journalError = "Permission denied reading journal";
+    journal[service.id]!.statusFailures = 1;
     writeFileSync(stateFile, JSON.stringify(journal));
     const denied = await client.callTool({ name: "server_logs", arguments: { path: group, service: "frontend" } });
     assert.equal(denied.isError, true);
