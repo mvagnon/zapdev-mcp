@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.0.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.6.0...v2.0.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **named-services:** Add named service lifecycle and log retrieval tooling for MCP servers
+
+### Features
+
+* **named-services:** Add named service lifecycle and log retrieval tooling for MCP servers ([5e71ef0](https://github.com/mvagnon/zapdev-mcp/commit/5e71ef0247dc8e4e4398cef827911bf591f05b2b))
+
+
+### Bug Fixes
+
+* **commit:** Always uses --yes --pull --no-push; adds --branch when supplied, otherwise uses the current branch. ([a70f859](https://github.com/mvagnon/zapdev-mcp/commit/a70f85911d6e7bdf598dd11d60170254cc37d6c3))
+* Switch to using ExecStopPost and KillSignal=SIGINT for controlled stop. ([1b30dc7](https://github.com/mvagnon/zapdev-mcp/commit/1b30dc72514eb8ee739d0e8abc8e3fa499aeca34))
+
 ## [1.6.0](https://github.com/mvagnon/zapdev-mcp/compare/v1.5.1...v1.6.0) (2026-10-22)
 
 
