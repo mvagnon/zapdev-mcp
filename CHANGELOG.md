@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.4...v2.3.0) (2026-10-23)
+
+
+### Features
+
+* **commit:** Add optional --pull flag to zapdev commit to pull before committing ([26976b0](https://github.com/mvagnon/zapdev-mcp/commit/26976b0bc3be7f78e3c5fc65ebadb4a954c36f90))
+
+
+### Bug Fixes
+
+* **documentation:** Clarify explicit invocation requirements and E2E context in tool and server descriptions. ([efe1ab3](https://github.com/mvagnon/zapdev-mcp/commit/efe1ab3a4ced908a11ab2ef91838a52c849358b3))
+
 ## [2.2.4](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.3...v2.2.4) (2026-10-22)
 
 
