@@ -97,7 +97,7 @@ server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes via npx zapdev, pulling fast-forward updates but never pushing. " +
+      "Commit all changes via npx zapdev; pull only when requested (default: false), never push. " +
       "Requires ZD_* configuration; sends commit context to the configured LLM.",
     inputSchema: z
       .object({
@@ -112,12 +112,17 @@ server.registerTool(
           .regex(/^(auto|(?:feat|fix|deps|chore|docs|style|refactor|perf|test|build|ci|revert)!?)$/)
           .default("auto")
           .describe("Conventional Commit type; auto chooses, ! marks breaking changes."),
+        pull: z
+          .boolean()
+          .default(false)
+          .describe("Pull fast-forward updates before committing when an upstream exists; default: false."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
-  async ({ path, branch, type }) => zapdev(path, [
-    "commit", "--yes", "--pull", "--no-push",
+  async ({ path, branch, type, pull }) => zapdev(path, [
+    "commit", "--yes", "--no-push",
+    ...(pull ? ["--pull"] : []),
     ...(type === "auto" ? [] : [`--type=${type}`]),
   ], branch),
 );

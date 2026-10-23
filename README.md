@@ -363,12 +363,18 @@ Commit changes in a local Git repository using zapdev without interactive review
 | `path`   | Yes      | Absolute path inside the local Git repository                                  |
 | `branch` | No       | Local branch to switch to or create; defaults to the current branch            |
 | `type`   | No       | Conventional Commit type; defaults to `auto`; append `!` for a breaking change |
+| `pull`   | No       | Boolean; pull fast-forward updates before committing; defaults to `false`     |
 
-Runs `zapdev commit --yes --pull --no-push`.
+Runs:
+
+```bash
+zapdev commit --yes --no-push
+```
+
 Optional arguments add `--branch=<branch>` and `--type=<type>`.
+Setting `pull: true` adds `--pull` to pull fast-forward updates when an upstream exists.
 Without `branch`, commits on the current branch.
-Pulls fast-forward updates when an upstream exists.
-Never pushes.
+Does not pull by default. Never pushes.
 
 Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`.
 Append `!` for breaking changes, such as `feat!`.
