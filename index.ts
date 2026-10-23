@@ -59,6 +59,7 @@ server.registerTool(
   {
     description:
       "Clone/reset a disposable GitHub checkout under ZD_REPOS_DIR (default ~/.zapdev/repos). Requires repo; group is optional. " +
+      "Call only when the user explicitly requests preparing or resetting this checkout; never call automatically as a prerequisite for another task. " +
       "Links repository secrets and, when grouped, group-root secrets; uses the group's config if present, otherwise the checkout's, for prepareCommand. " +
       "Destructive: discards tracked edits and untracked non-ignored files. Editing secret symlinks changes source secrets; keep links Git-ignored.",
     inputSchema: repositorySelectionSchema

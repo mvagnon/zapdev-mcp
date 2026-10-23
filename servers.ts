@@ -94,7 +94,7 @@ export function registerServerTools(server: McpServer): void {
     "start_server",
     {
       description:
-        "Start configured services using Linux/systemd; reuse active units. " +
+        "Start configured services using Linux/systemd; reuse active units. Useful for running services needed by end-to-end (E2E) tests. " +
         "Returns compact states/errors, not readiness. Use server_logs for diagnostics; stop failed units before restarting.",
       inputSchema: selectionSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
@@ -104,7 +104,7 @@ export function registerServerTools(server: McpServer): void {
 
   server.registerTool("stop_server", {
     description:
-      "Stop services via Linux/systemd: SIGINT, then SIGKILL after 30s, then optional cleanup. " +
+      "Stop services via Linux/systemd: SIGINT, then SIGKILL after 30s, then optional cleanup. Useful for shutting down services after end-to-end (E2E) tests. " +
       "Verifies process shutdown and unit release; clears old failed states. Cleanup or verification failures return errors. Use server_logs for diagnostics.",
     inputSchema: selectionSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },

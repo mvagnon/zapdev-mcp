@@ -163,6 +163,7 @@ Keep secret symlinks Git-ignored.
 This tool does not add ignore rules.
 
 **Destructive:** checkouts are disposable.
+Call this tool only when the user explicitly requests preparing or resetting the selected checkout, never automatically as a prerequisite for another task.
 Refresh overwrites tracked changes and removes untracked files and directories.
 Ignored files are preserved.
 Never prepare a checkout containing work you want to keep.
