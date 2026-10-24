@@ -260,23 +260,26 @@ console.error("scan warning");
       env: { PATH: `${directory}:${process.env.PATH}` },
     }));
 
-    for (const { type, branch, pull } of [
+    for (const { type, branch, pull, push } of [
       { type: undefined, branch: undefined },
       { type: "auto", branch: "feat/example" },
       { type: "fix!", branch: undefined },
       { type: "fix!", branch: "feat/example" },
       { type: "fix!", branch: "feat/example", pull: false },
       { type: "fix!", branch: "feat/example", pull: true },
+      { push: false },
+      { push: true },
+      { type: "fix!", branch: "feat/example", pull: true, push: true },
     ]) {
       const result = await client.callTool({
         name: "commit",
-        arguments: { path: directory, ...(branch && { branch }), ...(type && { type }), ...(pull !== undefined && { pull }) },
+        arguments: { path: directory, ...(branch && { branch }), ...(type && { type }), ...(pull !== undefined && { pull }), ...(push !== undefined && { push }) },
       });
       assert.notEqual(result.isError, true);
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "commit", "--yes", "--no-push",
+          "--yes", "zapdev", "commit", "--yes", push ? "--push" : "--no-push",
           ...(pull ? ["--pull"] : []),
           ...(type === "fix!" ? ["--type=fix!"] : []),
           ...(branch ? [`--branch=${branch}`] : []),
@@ -291,6 +294,7 @@ console.error("scan warning");
       { branch: "" },
       { type: "invalid" },
       { pull: "true" },
+      { push: "true" },
       { branch: "fail" },
     ]) {
       const result = await client.callTool({

@@ -97,7 +97,7 @@ server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes via npx zapdev; pull only when requested (default: false), never push. " +
+      "Commit all changes via npx zapdev; pull and push only when requested (both default: false). " +
       "Requires ZD_* configuration; sends commit context to the configured LLM.",
     inputSchema: z
       .object({
@@ -116,12 +116,16 @@ server.registerTool(
           .boolean()
           .default(false)
           .describe("Pull fast-forward updates before committing when an upstream exists; default: false."),
+        push: z
+          .boolean()
+          .default(false)
+          .describe("Push after committing without confirmation; default: false."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
-  async ({ path, branch, type, pull }) => zapdev(path, [
-    "commit", "--yes", "--no-push",
+  async ({ path, branch, type, pull, push }) => zapdev(path, [
+    "commit", "--yes", push ? "--push" : "--no-push",
     ...(pull ? ["--pull"] : []),
     ...(type === "auto" ? [] : [`--type=${type}`]),
   ], branch),
