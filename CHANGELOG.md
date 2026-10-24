@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.3.0...v2.4.0) (2026-10-24)
+
+
+### Features
+
+* **commit-workflow:** Introduce push option for zapdev commit; update tests and docs to support pushing after commit. ([0888b39](https://github.com/mvagnon/zapdev-mcp/commit/0888b397ba670fb4b559be5db75fdc29535d3786))
+* **servers:** Add list_services tool to list configured services for a prepared checkout or group. ([bfff185](https://github.com/mvagnon/zapdev-mcp/commit/bfff1856d86a2a7ce86795bc8b4f55fd01cb2712))
+
 ## [2.3.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.4...v2.3.0) (2026-10-23)
 
 
