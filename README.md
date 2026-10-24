@@ -9,7 +9,7 @@
 ## Project Introduction
 
 **zapdev-mcp** brings [zapdev](https://github.com/mvagnon/zapdev) workflows to your AI assistant.
-Six stdio tools prepare disposable checkouts, manage services and logs, commit changes, and create pull requests.
+Seven stdio tools prepare disposable checkouts, discover and manage services and logs, commit changes, and create pull requests.
 Commit and PR tools use `npx --yes zapdev`.
 No global installation is needed.
 
@@ -19,7 +19,7 @@ No global installation is needed.
 flowchart LR
   Client["MCP client"] -->|stdio| Server["index.ts"]
   Server --> Repos["prepare_repo"]
-  Server --> Servers["start_server / stop_server / server_logs"]
+  Server --> Servers["list_services / start_server / stop_server / server_logs"]
   Servers --> Config["~/.zapdev/config"]
   Servers --> Systemd["systemd user services"]
   Servers --> Logs["journald / journalctl --user-unit"]
@@ -243,10 +243,18 @@ Commands and services are scoped to the selection:
 - `prepare_repo` with `repo` alone selects a root checkout.
 - `prepare_repo` with `repo` and `group` prepares one checkout, then uses the group configuration if present, otherwise that checkout's configuration.
 - `prepare_repo` requires `repo`; `group` alone is rejected.
-- Explicit checkout paths for start, stop, and logs never select group services.
-- Start, stop, and logs use the same configuration selection.
+- Explicit checkout paths for service tools never select group services.
+- All service tools use the same configuration selection.
 
 Before adopting a group configuration, stop any previously started child services using their explicit checkout paths.
+
+### `list_services`
+
+List configured services without starting them, running commands, or querying systemd.
+Accepts the same optional `path` (default server cwd) and `service` as `start_server`.
+Returns `{ path, services: [{ name, path }] }`; commands, URLs, logs, and runtime states are omitted.
+An empty selection returns `services: []`; an unknown service filter returns an error.
+This read-only tool does not require Linux or systemd and does not check readiness.
 
 ### `start_server`
 

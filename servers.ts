@@ -88,8 +88,19 @@ const selectionSchema = z.object({
   service: serviceNameSchema.optional().describe("Service name; omitted selects all."),
 }).strict();
 
-/** Register named service startup, shutdown, and bounded log tools for prepared repositories and groups. */
+/** Register named service discovery, startup, shutdown, and bounded log tools for prepared repositories and groups. */
 export function registerServerTools(server: McpServer): void {
+  server.registerTool("list_services", {
+    description:
+      "List configured services available to start in a prepared checkout or group. " +
+      "Returns service names and paths only; does not run commands, query systemd, or check readiness.",
+    inputSchema: selectionSchema,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  }, async input => result(async () => {
+    const selection = selected(input);
+    return { path: selection.path, services: selection.services.map(({ name, path }) => ({ name, path })) };
+  }));
+
   server.registerTool(
     "start_server",
     {

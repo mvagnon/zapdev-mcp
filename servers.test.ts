@@ -149,12 +149,19 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     }
     const client = await connect();
     const tools = await client.listTools();
-    for (const name of ["start_server", "stop_server", "server_logs"]) {
-      const tool = tools.tools.find(tool => tool.name === name)!;
+    for (const name of ["list_services", "start_server", "stop_server", "server_logs"]) {
+      const tool = tools.tools.find(tool => tool.name === name);
+      assert.ok(tool, `${name}: tool must be registered`);
       assert.equal(tool.inputSchema.required?.includes("path") ?? false, false, `${name}: path must be optional`);
       assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(),
         name === "server_logs" ? ["lines", "path", "service"] : ["path", "service"]);
     }
+    const listed = await client.callTool({ name: "list_services", arguments: { path: group } });
+    assert.notEqual(listed.isError, true, JSON.stringify(listed.content));
+    assert.deepEqual(listed.structuredContent, { path: group, services: [{ name: "frontend", path: group }] });
+    assert.deepEqual(units(), {});
+    assert.deepEqual(tools.tools.find(tool => tool.name === "list_services")?.annotations,
+      { readOnlyHint: true, destructiveHint: false, idempotentHint: true });
     const started = await client.callTool({ name: "start_server", arguments: { path: group } });
     assert.notEqual(started.isError, true, JSON.stringify(started.content));
     assert.deepEqual(started.structuredContent, {
@@ -187,9 +194,11 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal(Object.keys(units()).length, 1);
     const groupClient = await connect(group);
     for (const input of [{}, { path: "" }]) {
-      const response = await groupClient.callTool({ name: "server_logs", arguments: input });
-      assert.notEqual(response.isError, true, JSON.stringify(response.content));
-      assert.deepEqual((response.structuredContent?.services as Service[]).map(({ path }) => path), [group]);
+      for (const name of ["list_services", "server_logs"]) {
+        const response = await groupClient.callTool({ name, arguments: input });
+        assert.notEqual(response.isError, true, JSON.stringify(response.content));
+        assert.deepEqual((response.structuredContent?.services as Service[]).map(({ path }) => path), [group]);
+      }
     }
     assert.equal((await client.callTool({
       name: "start_server", arguments: { path: first, service: "frontend" },
@@ -288,7 +297,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
 
     for (const config of [{}, { services: {} }, { frontUrl: "http://localhost:3000" }]) {
       writeFileSync(parentConfig, JSON.stringify(config));
-      for (const name of ["start_server", "stop_server", "server_logs"]) {
+      for (const name of ["list_services", "start_server", "stop_server", "server_logs"]) {
         const empty = await client.callTool({ name, arguments: { path: group } });
         assert.notEqual(empty.isError, true, JSON.stringify(empty.content));
         assert.deepEqual(empty.structuredContent, { path: group, services: [] });
@@ -297,6 +306,13 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
       }
     }
     rmSync(parentConfig);
+    const beforeListing = units();
+    const childrenListed = await client.callTool({ name: "list_services", arguments: { path: group, service: "backend" } });
+    assert.notEqual(childrenListed.isError, true, JSON.stringify(childrenListed.content));
+    assert.deepEqual(childrenListed.structuredContent, {
+      path: group, services: [{ name: "backend", path: first }, { name: "backend", path: second }],
+    });
+    assert.deepEqual(units(), beforeListing);
     for (const name of ["start_server", "server_logs", "stop_server"]) {
       const children = await client.callTool({ name, arguments: { path: group, service: "backend" } });
       assert.notEqual(children.isError, true, JSON.stringify(children.content));
@@ -378,7 +394,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
       assert.equal((await client.callTool({ name: "start_server", arguments: { path: group } })).isError, true);
     }
     writeFileSync(parentConfig, "{}");
-    for (const name of ["start_server", "stop_server", "server_logs"]) {
+    for (const name of ["list_services", "start_server", "stop_server", "server_logs"]) {
       for (const input of [{ path: group, repo: "owner/first" }, { path: group, group: "my-group" },
         { path: group, service: "missing" }, { path: "relative" }, { path: directory }]) {
         assert.equal((await client.callTool({ name, arguments: input })).isError, true);
