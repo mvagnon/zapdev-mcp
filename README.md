@@ -10,7 +10,7 @@
 
 **zapdev-mcp** brings [zapdev](https://github.com/mvagnon/zapdev) workflows to your AI assistant.
 Eight stdio tools prepare disposable checkouts and worktrees, discover and manage services and logs, commit changes, and create pull requests.
-Commit and PR tools use `npx --yes zapdev`.
+Commit and PR tools use `npx --yes zapdev` by default, or a local clone with `--zapdev-path`.
 No global installation is needed.
 
 ## Project Architecture
@@ -25,7 +25,7 @@ flowchart LR
   Servers --> Logs["journald / journalctl --user-unit"]
   Server --> Commands["commit / pr"]
   Repos --> Git["Git / GitHub"]
-  Commands --> CLI["npx --yes zapdev"]
+  Commands --> CLI["npm or local zapdev"]
   CLI --> Tools["Git, GitHub CLI, Gitleaks, LLM API"]
 ```
 
@@ -97,9 +97,27 @@ Choose a model with strict structured output support.
 Set `ZD_API_KEY` when authentication is required.
 Never commit credentials.
 
-Make `git` and `npx` available on the server's `PATH`.
+Make `git` available on the server's `PATH`, and `npx` when using npm zapdev.
 PR creation also requires `gh`.
 The server runs on the client's host, not in a sandbox.
+
+### Local zapdev clone
+
+| Startup flag | Description |
+| ------------ | ----------- |
+| `--zapdev-path <absolute-path>` | Use a local zapdev clone instead of invoking zapdev through `npx`; no literal `~` |
+
+Run `npm install` and `npm run build` in the clone first.
+Then extend the MCP client's server arguments:
+
+```json
+"args": ["--yes", "zapdev-mcp", "--zapdev-path", "/absolute/path/to/zapdev"]
+```
+
+The server runs `<clone>/dist/index.js` with its own Node.js executable, preserving its working directory and environment.
+Rebuild the clone after source changes; the MCP does not install dependencies or build it automatically.
+A missing local build returns an error without falling back to npm.
+Omitting the flag preserves the default `npx --yes zapdev` behavior.
 
 ## Usage
 

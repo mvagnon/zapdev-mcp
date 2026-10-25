@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { isAbsolute } from "node:path";
-import { promisify } from "node:util";
+import { statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { parseArgs, promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -12,6 +13,12 @@ import { registerServerTools } from "./servers.js";
 import { prepareWorktree } from "./worktrees.js";
 
 const exec = promisify(execFile);
+const { values } = parseArgs({ options: { "zapdev-path": { type: "string" } } });
+const zapdevPath = values["zapdev-path"];
+if (zapdevPath !== undefined && !isAbsolute(zapdevPath)) {
+  throw new Error("Expected --zapdev-path to be an absolute path to a local zapdev clone (no ~).");
+}
+const zapdevEntry = zapdevPath === undefined ? undefined : join(zapdevPath, "dist", "index.js");
 
 const pullRequestResultSchema = z.object({
   pullRequests: z.array(z.object({
@@ -24,7 +31,7 @@ const pullRequestResultSchema = z.object({
   error: z.string().optional(),
 });
 
-/** Run zapdev through npx with a repository path, returning CLI output or an MCP error. */
+/** Run local or npm zapdev with a repository path, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
   const output: Partial<z.infer<typeof pullRequestResultSchema>> & {
     stdout: string; stderr: string; instructions?: string;
@@ -34,9 +41,12 @@ async function zapdev(path: string, args: [string, ...string[]], branch?: string
     if (selection.repositories.length === 0) throw new Error(`No Git repository found in ${selection.path} or its immediate children.`);
     path = selection.path;
     if (branch !== undefined) await git(path, "check-ref-format", "--branch", branch);
+    if (zapdevEntry !== undefined && !statSync(zapdevEntry, { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`Local zapdev build not found at ${zapdevEntry}. Run npm install and npm run build in the zapdev clone.`);
+    }
     const { stdout, stderr } = await exec(
-      "npx",
-      ["--yes", "zapdev", args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])],
+      zapdevEntry === undefined ? "npx" : process.execPath,
+      [...(zapdevEntry === undefined ? ["--yes", "zapdev"] : [zapdevEntry]), args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])],
       {
         env: {
           ...process.env,
@@ -151,7 +161,7 @@ server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes in the enclosing repository or immediate child repositories via npx zapdev; pull and push only when requested (both default: false). " +
+      "Commit all changes in the enclosing repository or immediate child repositories via zapdev; pull and push only when requested (both default: false). " +
       "Requires ZD_* configuration; sends commit context to the configured LLM.",
     inputSchema: z
       .object({
@@ -189,7 +199,7 @@ server.registerTool(
   "pr",
   {
     description:
-      "Push branches and create GitHub PRs for the enclosing repository or immediate child repositories via npx zapdev --json. Requires clean trees, gh auth and ZD_* configuration. " +
+      "Push branches and create GitHub PRs for the enclosing repository or immediate child repositories via zapdev --json. Requires clean trees, gh auth and ZD_* configuration. " +
       "Sends commit messages to the LLM. Never force-pushes; check remote state before retrying errors. " +
       "Always enables cleanup of the source branch's linked worktrees after PR creation, including ignored files; " +
       "the MCP server must run outside those worktrees. Preserves the main worktree, branches and commits; never forces removal. " +

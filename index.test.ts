@@ -237,8 +237,11 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
   }
 });
 
-test("commit and pr validate inputs and invoke zapdev through npx without prompts", async () => {
+for (const local of [false, true]) test(`commit and pr validate inputs and invoke ${local ? "local zapdev" : "npx"} without prompts`, async () => {
   const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test space-"));
+  const clone = join(directory, "zapdev clone");
+  const entry = join(clone, "dist", "index.js");
+  const prefix = local ? [] : ["--yes", "zapdev"];
   const root = join(directory, "repos");
   const repository = join(root, "repo");
   const group = join(root, "group");
@@ -248,21 +251,25 @@ test("commit and pr validate inputs and invoke zapdev through npx without prompt
     execFileSync("git", ["init", "--quiet", repository]);
     execFileSync("git", ["init", "--quiet", outside]);
     symlinkSync(outside, join(root, "escape"));
+    if (local) {
+      mkdirSync(join(clone, "dist"), { recursive: true });
+      writeFileSync(join(directory, "npx"), `#!${process.execPath}\nthrow new Error("Unexpected npx fallback");\n`, { mode: 0o755 });
+    }
     writeFileSync(
-      join(directory, "npx"),
+      local ? entry : join(directory, "npx"),
       `#!${process.execPath}
 if (process.argv.includes("--branch=fail")) {
   console.error("commit failed");
   process.exit(1);
 }
-console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), ...(process.argv[4] === "pr" && { pullRequests: [] }) }));
+console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), ...(process.argv.includes("--json") && { pullRequests: [] }) }));
 console.error("scan warning");
 `,
       { mode: 0o755 },
     );
     await client.connect(new StdioClientTransport({
       command: process.execPath,
-      args: ["--import", "tsx", "index.ts"],
+      args: ["--import", "tsx", "index.ts", ...(local ? ["--zapdev-path", clone] : [])],
       env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, ZD_REPOS_DIR: root },
     }));
 
@@ -292,7 +299,7 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "commit", realpathSync(repository), "--yes", push ? "--push" : "--no-push",
+          ...prefix, "commit", realpathSync(repository), "--yes", push ? "--push" : "--no-push",
           ...(pull ? ["--pull"] : []),
           ...(type === "fix!" ? ["--type=fix!"] : []),
           ...(branch ? [`--branch=${branch}`] : []),
@@ -334,7 +341,7 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "pr", realpathSync(repository), "--yes", "--cleanup-worktrees", "--json",
+          ...prefix, "pr", realpathSync(repository), "--yes", "--cleanup-worktrees", "--json",
           ...(input.closes ? [`--closes=${input.closes}`] : []),
           ...(input.branch ? [`--branch=${input.branch}`] : []),
         ],
@@ -367,10 +374,20 @@ console.error("scan warning");
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const output = result.structuredContent as { stdout: string };
       assert.deepEqual(JSON.parse(output.stdout), {
-        args: ["--yes", "zapdev", name, realpathSync(group), "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
+        args: [...prefix, name, realpathSync(group), "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
         cwd: realpathSync(process.cwd()),
         ...(name === "pr" && { pullRequests: [] }),
       });
+    }
+    if (local) {
+      rmSync(entry);
+      for (const name of ["commit", "pr"]) {
+        const result = await client.callTool({ name, arguments: { path: repository } });
+        assert.equal(result.isError, true);
+        assert.match(result.structuredContent?.error as string, /local zapdev build.*npm run build/i);
+        assert.equal(result.structuredContent?.stdout, "");
+        assert.doesNotMatch(result.structuredContent?.error as string, /Unexpected npx fallback/);
+      }
     }
   } finally {
     await client.close();
