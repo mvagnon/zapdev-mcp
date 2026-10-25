@@ -478,7 +478,10 @@ Push the current branch and create a GitHub pull request without confirmation fo
 | `closes` | No       | HTTP(S) task URL to append as `Closes <url>` in the description               |
 
 Runs `zapdev pr <path> --yes --cleanup-worktrees --json` with the supplied target branch and task reference, without changing the MCP server's working directory.
-The CLI's JSON result is returned in `stdout`, including PR URLs and deleted/skipped worktree paths; diagnostics remain in `stderr`.
+The CLI's JSON result is parsed into `pullRequests`, with each PR's `repo`, `branch`, `url`, `deletedWorktrees` paths and `skippedWorktrees` entries (`path`, `reason`).
+These fields and agent instructions are returned in both text and structured content, including partial results when the CLI exits with an error.
+Deleted worktree paths must no longer be used; retained worktrees require inspection before cleanup, never forced removal.
+The original `stdout` and diagnostics in `stderr` remain available for compatibility; invalid JSON is reported as an error without discarding them.
 Requires a clean working tree and authenticated GitHub CLI.
 Full branch commit messages are sent to the configured LLM to generate the title.
 The description is built from the commits.

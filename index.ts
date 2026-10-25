@@ -13,8 +13,22 @@ import { prepareWorktree } from "./worktrees.js";
 
 const exec = promisify(execFile);
 
+const pullRequestResultSchema = z.object({
+  pullRequests: z.array(z.object({
+    repo: z.string(),
+    branch: z.string(),
+    url: z.string(),
+    deletedWorktrees: z.array(z.string()),
+    skippedWorktrees: z.array(z.object({ path: z.string(), reason: z.string() })),
+  })),
+  error: z.string().optional(),
+});
+
 /** Run zapdev through npx with a repository path, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
+  const output: Partial<z.infer<typeof pullRequestResultSchema>> & {
+    stdout: string; stderr: string; instructions?: string;
+  } = { stdout: "", stderr: "" };
   try {
     const selection = await selectRepositories(path);
     if (selection.repositories.length === 0) throw new Error(`No Git repository found in ${selection.path} or its immediate children.`);
@@ -33,20 +47,32 @@ async function zapdev(path: string, args: [string, ...string[]], branch?: string
         timeout: 180_000,
       },
     );
-    const output = { stdout: stdout.trim(), stderr: stderr.trim() };
-    return {
-      content: [{ type: "text", text: JSON.stringify(output) }],
-      structuredContent: output,
-    };
+    output.stdout = stdout.trim();
+    output.stderr = stderr.trim();
   } catch (error) {
-    const output = {
-      error: error instanceof Error ? error.message : String(error),
-    };
-    return {
-      isError: true,
-      content: [{ type: "text", text: JSON.stringify(output) }],
-    };
+    output.error = error instanceof Error ? error.message : String(error);
+    if (error instanceof Error) {
+      if ("stdout" in error && typeof error.stdout === "string") output.stdout = error.stdout.trim();
+      if ("stderr" in error && typeof error.stderr === "string") output.stderr = error.stderr.trim();
+    }
   }
+  if (args[0] === "pr" && (output.stdout || output.error === undefined)) {
+    try {
+      const result = pullRequestResultSchema.parse(JSON.parse(output.stdout));
+      output.pullRequests = result.pullRequests;
+      if (result.error !== undefined) output.error = result.error;
+      output.instructions = "Deleted worktree paths no longer exist; do not use them as a working directory. " +
+        "Skipped worktrees were retained: inspect their paths and reasons before cleanup; never force removal. " +
+        "If an error is reported, check remote PR state before retrying; partial results are preserved.";
+    } catch {
+      output.error ??= "Invalid JSON result from zapdev pr; inspect stdout/stderr and remote state before retrying.";
+    }
+  }
+  return {
+    ...(output.error !== undefined && { isError: true }),
+    content: [{ type: "text", text: JSON.stringify(output) }],
+    structuredContent: output,
+  };
 }
 
 const repositoryPath = z
@@ -166,7 +192,9 @@ server.registerTool(
       "Push branches and create GitHub PRs for the enclosing repository or immediate child repositories via npx zapdev --json. Requires clean trees, gh auth and ZD_* configuration. " +
       "Sends commit messages to the LLM. Never force-pushes; check remote state before retrying errors. " +
       "Always enables cleanup of the source branch's linked worktrees after PR creation, including ignored files; " +
-      "the MCP server must run outside those worktrees. Preserves the main worktree, branches and commits; never forces removal.",
+      "the MCP server must run outside those worktrees. Preserves the main worktree, branches and commits; never forces removal. " +
+      "Returns pullRequests with deletedWorktrees and skippedWorktrees (path and reason), including partial results on failure. " +
+      "Do not use deleted worktree paths; inspect skipped worktrees before any manual cleanup.",
     inputSchema: z
       .object({
         path: repositoryPath,

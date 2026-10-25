@@ -255,7 +255,7 @@ if (process.argv.includes("--branch=fail")) {
   console.error("commit failed");
   process.exit(1);
 }
-console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));
+console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), ...(process.argv[4] === "pr" && { pullRequests: [] }) }));
 console.error("scan warning");
 `,
       { mode: 0o755 },
@@ -339,6 +339,7 @@ console.error("scan warning");
           ...(input.branch ? [`--branch=${input.branch}`] : []),
         ],
         cwd: realpathSync(process.cwd()),
+        pullRequests: [],
       });
       assert.equal(output.stderr, "scan warning");
     }
@@ -368,7 +369,63 @@ console.error("scan warning");
       assert.deepEqual(JSON.parse(output.stdout), {
         args: ["--yes", "zapdev", name, realpathSync(group), "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
         cwd: realpathSync(process.cwd()),
+        ...(name === "pr" && { pullRequests: [] }),
       });
+    }
+  } finally {
+    await client.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("pr exposes deleted and skipped worktrees, including partial failures", async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-pr-")));
+  const repository = join(directory, "repo");
+  const client = new Client({ name: "pr-result-test", version: "1.0.0" });
+  const pullRequests = [{
+    repo: repository,
+    branch: "feat/example",
+    url: "https://github.com/owner/repo/pull/1",
+    deletedWorktrees: [join(directory, "deleted worktree")],
+    skippedWorktrees: [{ path: join(directory, "retained worktree"), reason: "contains untracked files" }],
+  }];
+  try {
+    execFileSync("git", ["init", "--quiet", repository]);
+    writeFileSync(join(directory, "npx"), `#!${process.execPath}
+const branch = process.argv.find(arg => arg.startsWith("--branch="))?.slice(9);
+const pullRequests = ${JSON.stringify(pullRequests)};
+const error = branch === "partial" ? "second repository: creation failed" : undefined;
+console.log(JSON.stringify({ pullRequests: branch === "empty" ? [] : pullRequests, ...(error && { error }) }));
+console.error("cleanup diagnostic");
+if (error || branch === "nonzero") process.exit(1);
+`, { mode: 0o755 });
+    await client.connect(new StdioClientTransport({
+      command: process.execPath,
+      args: ["--import", "tsx", "index.ts"],
+      env: { PATH: `${directory}:${process.env.PATH}`, ZD_REPOS_DIR: directory },
+    }));
+
+    for (const branch of ["success", "partial", "empty", "nonzero"]) {
+      const result = await client.callTool({ name: "pr", arguments: { path: repository, branch } });
+      assert.equal(result.isError === true, branch === "partial" || branch === "nonzero");
+      const output = result.structuredContent!;
+      assert.deepEqual(output.pullRequests, branch === "empty" ? [] : pullRequests);
+      assert.equal(output.stderr, "cleanup diagnostic");
+      assert.deepEqual(JSON.parse(output.stdout as string).pullRequests, output.pullRequests);
+      assert.match(output.instructions as string, /deleted.*worktree/i);
+      assert.match(output.instructions as string, /skipped.*worktree/i);
+      if (branch === "partial") assert.equal(output.error, "second repository: creation failed");
+      if (branch === "nonzero") assert.equal(typeof output.error, "string");
+      assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(output) }]);
+    }
+
+    for (const stdout of ["not JSON", JSON.stringify({ pullRequests: [{ ...pullRequests[0], skippedWorktrees: ["missing reason"] }] })]) {
+      writeFileSync(join(directory, "npx"), `#!${process.execPath}\nconsole.log(${JSON.stringify(stdout)});\n`, { mode: 0o755 });
+      const invalid = await client.callTool({ name: "pr", arguments: { path: repository } });
+      assert.equal(invalid.isError, true);
+      assert.equal(invalid.structuredContent?.stdout, stdout);
+      assert.equal(invalid.structuredContent?.pullRequests, undefined);
+      assert.match(JSON.stringify(invalid.content), /invalid.*JSON/i);
     }
   } finally {
     await client.close();
