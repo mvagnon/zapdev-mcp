@@ -238,7 +238,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
 });
 
 test("commit and pr validate inputs and invoke zapdev through npx without prompts", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test-"));
+  const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test space-"));
   const client = new Client({ name: "commit-test", version: "1.0.0" });
   try {
     execFileSync("git", ["init", "--quiet", directory]);
@@ -279,12 +279,12 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "commit", "--yes", push ? "--push" : "--no-push",
+          "--yes", "zapdev", "commit", directory, "--yes", push ? "--push" : "--no-push",
           ...(pull ? ["--pull"] : []),
           ...(type === "fix!" ? ["--type=fix!"] : []),
           ...(branch ? [`--branch=${branch}`] : []),
         ],
-        cwd: realpathSync(directory),
+        cwd: realpathSync(process.cwd()),
       });
       assert.equal(output.stderr, "scan warning");
     }
@@ -321,11 +321,11 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "pr", "--yes",
+          "--yes", "zapdev", "pr", directory, "--yes", "--cleanup-worktrees",
           ...(input.closes ? [`--closes=${input.closes}`] : []),
           ...(input.branch ? [`--branch=${input.branch}`] : []),
         ],
-        cwd: realpathSync(directory),
+        cwd: realpathSync(process.cwd()),
       });
       assert.equal(output.stderr, "scan warning");
     }

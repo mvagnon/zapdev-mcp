@@ -377,7 +377,7 @@ Commit changes in a local Git repository using zapdev without interactive review
 Runs:
 
 ```bash
-zapdev commit --yes --no-push
+zapdev commit <path> --yes --no-push
 ```
 
 Optional arguments add `--branch=<branch>` and `--type=<type>`.
@@ -385,6 +385,7 @@ Setting `pull: true` adds `--pull` to pull fast-forward updates when an upstream
 Setting `push: true` replaces `--no-push` with `--push` to push after committing.
 Without `branch`, commits on the current branch.
 Does not pull or push by default.
+The path is passed directly to zapdev without changing the MCP server's working directory; linked worktree paths are supported.
 
 Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`.
 Append `!` for breaking changes, such as `feat!`.
@@ -402,10 +403,14 @@ Push the current branch and create a GitHub pull request without confirmation.
 | `branch` | No       | PR target branch, not the working branch; defaults to GitHub's default branch |
 | `closes` | No       | HTTP(S) task URL to append as `Closes <url>` in the description               |
 
-Runs `zapdev pr --yes` with the supplied target branch and task reference.
+Runs `zapdev pr <path> --yes --cleanup-worktrees` with the supplied target branch and task reference, without changing the MCP server's working directory.
 Requires a clean working tree and authenticated GitHub CLI.
 Full branch commit messages are sent to the configured LLM to generate the title.
 The description is built from the commits.
+
+The MCP server must run outside every targeted linked worktree, including subdirectories and symlinked paths; otherwise, the CLI refuses before pushing.
+After successful PR creation, cleanup removes matching linked worktree directories and Git registrations, **including ignored files**.
+The main worktree, branches and commits are preserved. Locked, missing, dirty or branch/HEAD-changed worktrees are skipped with warnings; removal is never forced.
 
 **Safety:** never force-pushes.
 Check remote state before retrying an error.

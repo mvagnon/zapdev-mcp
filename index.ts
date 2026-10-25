@@ -12,16 +12,15 @@ import { registerServerTools } from "./servers.js";
 
 const exec = promisify(execFile);
 
-/** Run zapdev through npx in one repository, returning CLI output or an MCP error. */
-async function zapdev(path: string, args: string[], branch?: string): Promise<CallToolResult> {
+/** Run zapdev through npx with a repository path, returning CLI output or an MCP error. */
+async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
   try {
     await git(path, "rev-parse", "--show-toplevel");
     if (branch !== undefined) await git(path, "check-ref-format", "--branch", branch);
     const { stdout, stderr } = await exec(
       "npx",
-      ["--yes", "zapdev", ...args, ...(branch ? [`--branch=${branch}`] : [])],
+      ["--yes", "zapdev", args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])],
       {
-        cwd: path,
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: "0",
@@ -136,7 +135,9 @@ server.registerTool(
   {
     description:
       "Push the branch and create a GitHub PR via npx zapdev. Requires a clean tree, gh auth and ZD_* configuration. " +
-      "Sends commit messages to the LLM. Never force-pushes; check remote state before retrying errors.",
+      "Sends commit messages to the LLM. Never force-pushes; check remote state before retrying errors. " +
+      "Always enables cleanup of the source branch's linked worktrees after PR creation, including ignored files; " +
+      "the MCP server must run outside those worktrees. Preserves the main worktree, branches and commits; never forces removal.",
     inputSchema: z
       .object({
         path: repositoryPath,
@@ -154,7 +155,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   async ({ path, branch, closes }) => zapdev(path, [
-    "pr", "--yes",
+    "pr", "--yes", "--cleanup-worktrees",
     ...(closes ? [`--closes=${closes}`] : []),
   ], branch),
 );
