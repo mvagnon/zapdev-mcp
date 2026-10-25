@@ -25,7 +25,7 @@ test("services return compact actions and scoped journal diagnostics", async () 
     remainingPid?: number; remainingControlPid?: number; remainingTasks?: number; stopState?: string; missingPid?: boolean;
   };
   type Service = {
-    id: string; name: string; path: string; state: string; exitCode?: number;
+    id: string; name: string; path: string; state: string; exitCode?: number; mainPid?: number;
     error?: string; logs?: string; truncated?: boolean; maxRuntimeSeconds?: number;
   };
   const units = (): Record<string, Unit> => JSON.parse(readFileSync(stateFile, "utf8"));
@@ -109,6 +109,7 @@ if (args.at(-1).includes("fail-later")) units[id].exitAt = Date.now() + 150;
 if (failed) units[id].logs = "Backend startup failed\\n";
 fs.writeFileSync(file, JSON.stringify(units));
 if (failed) { console.error("Start failed"); process.exit(1); }
+if (args.at(-1).includes("concurrent-start")) { console.error("Unit already exists"); process.exit(1); }
 `, { mode: 0o755 });
     writeFileSync(join(directory, "journalctl"), `#!${process.execPath}
 const fs = require("node:fs");
@@ -199,18 +200,31 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal(existsSync(join(directory, ".zapdev", "services")), false);
 
     const other = await connect();
-    const repeated = await other.callTool({ name: "start_server", arguments: { path: group } });
-    assert.notEqual(repeated.isError, true, JSON.stringify(repeated.content));
-    assert.deepEqual(repeated.structuredContent, started.structuredContent);
-    assert.deepEqual(units()[service.id]!.args, args);
-    assert.equal(Object.keys(units()).length, 1);
+    for (const state of ["active", "activating"]) {
+      const existing = units();
+      existing[service.id]!.state = state;
+      writeFileSync(stateFile, JSON.stringify(existing));
+      const repeated = await other.callTool({ name: "start_server", arguments: { path: group } });
+      assert.equal(repeated.isError, true, JSON.stringify(repeated.content));
+      assert.deepEqual(repeated.structuredContent, {
+        path: group, services: [{ name: "frontend", path: group, state, id: service.id,
+          mainPid: state === "active" ? 123 : 0, maxRuntimeSeconds: 10_800,
+          error: `Service frontend is already running (${state}).` }],
+      });
+      assert.deepEqual(units()[service.id]!.args, args);
+      assert.equal(units()[service.id]!.runCount, 1);
+      assert.equal(Object.keys(units()).length, 1);
+    }
     const legacy = units();
+    legacy[service.id]!.state = "active";
     legacy[service.id]!.args = args.filter(arg => !arg.startsWith("--property=RuntimeMaxSec=") &&
       !arg.startsWith("--property=ExecStartPost="));
     writeFileSync(stateFile, JSON.stringify(legacy));
     const reusedLegacy = await other.callTool({ name: "start_server", arguments: { path: group } });
+    assert.equal(reusedLegacy.isError, true);
     assert.deepEqual(reusedLegacy.structuredContent, {
-      path: group, services: [{ name: "frontend", path: group, state: "active" }],
+      path: group, services: [{ name: "frontend", path: group, state: "active", id: service.id, mainPid: 123,
+        error: "Service frontend is already running (active)." }],
     });
     assert.deepEqual(units()[service.id]!.args, legacy[service.id]!.args);
     legacy[service.id]!.args = args;
@@ -366,11 +380,25 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     });
     for (const name of ["start_server", "server_logs", "stop_server"]) {
       const children = await client.callTool({ name, arguments: { path: group, service: "backend" } });
-      assert.notEqual(children.isError, true, JSON.stringify(children.content));
+      assert.equal(children.isError, name === "start_server" ? true : undefined, JSON.stringify(children.content));
       const childServices = children.structuredContent?.services as Service[];
       assert.deepEqual(childServices.map(({ path }) => path), [first, second]);
       assert.ok(childServices.every(({ state }) => state === (name === "stop_server" ? "inactive" : "active")));
+      if (name === "start_server") {
+        assert.equal(childServices[0]?.id, child.id);
+        assert.equal(childServices[0]?.mainPid, 123);
+        assert.equal(childServices[1]?.error, undefined);
+      }
     }
+
+    writeFileSync(parentConfig, JSON.stringify({ services: { concurrent: { startCommand: "concurrent-start" } } }));
+    const concurrent = await client.callTool({ name: "start_server", arguments: { path: group } });
+    assert.equal(concurrent.isError, true);
+    const concurrentService = (concurrent.structuredContent?.services as Service[])[0]!;
+    assert.equal(concurrentService.state, "active");
+    assert.equal(concurrentService.mainPid, 123);
+    assert.match(concurrentService.error ?? "", /Unit already exists/);
+    assert.equal(units()[concurrentService.id]!.runCount, 1);
 
     writeFileSync(parentConfig, JSON.stringify({ services: {
       good: { startCommand: "npm run dev" },
@@ -384,7 +412,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal(partialServices.find(({ name }) => name === "good")?.state, "active");
     assert.match(partialServices.find(({ name }) => name === "bad")?.error ?? "", /Start failed/);
     assert.equal(partialServices.find(({ name }) => name === "late")?.state, "failed");
-    assert.ok(partialServices.every(service => Object.keys(service).every(key => ["name", "path", "state", "error", "maxRuntimeSeconds"].includes(key))));
+    assert.ok(partialServices.every(service => Object.keys(service).every(key => ["name", "path", "id", "state", "mainPid", "error", "maxRuntimeSeconds"].includes(key))));
     const late = await client.callTool({ name: "server_logs", arguments: { path: group, service: "late" } });
     assert.equal((late.structuredContent?.services as Service[])[0]?.exitCode, 127);
     assert.match((late.structuredContent?.services as Service[])[0]?.logs ?? "", /expo: command not found/);

@@ -92,32 +92,27 @@ async function journalLogs(id: string, lines: number): Promise<Logs> {
 }
 
 async function start(service: Service, id: string, current: Status): Promise<Status> {
-  if (["active", "activating", "failed"].includes(current.state)) return current;
+  if (["active", "activating"].includes(current.state)) throw new Error(`Service ${service.name} is already running (${current.state}).`);
+  if (current.state === "failed") return current;
   if (current.state !== "inactive") throw new Error(`Service is ${current.state}; wait before starting it.`);
   const environment = Object.keys(process.env).filter(name => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
     !/^(INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|NOTIFY_SOCKET|LISTEN_.*|WATCHDOG_.*)$/.test(name));
-  try {
-    await systemd("systemd-run", [
-      "--quiet", `--unit=${id}`, "--service-type=exec", "--remain-after-exit",
-      `--working-directory=${service.path}`, "--property=KillMode=control-group",
-      "--property=KillSignal=SIGINT", "--property=SendSIGKILL=yes",
-      `--property=TimeoutStopSec=${stopTimeoutSeconds}s`, "--property=StandardOutput=journal",
-      "--property=StandardError=journal",
-      `--property=RuntimeMaxSec=${maxRuntimeSeconds}`,
-      `--property=ExecStartPost=systemd-run --user --quiet --collect --unit=${id.slice(0, -8)}-expiry ` +
-        `--on-active=${maxRuntimeSeconds}s --timer-property=AccuracySec=1s --timer-property=RemainAfterElapse=no ` +
-        `--timer-property=PartOf=${id} systemctl --user --no-block stop ${id}`,
-      ...(service.stopCommand === undefined ? [] : [
-        `--property=ExecStopPost=:/bin/sh -c ${JSON.stringify(service.stopCommand)}`,
-      ]),
-      ...environment.map(name => `--setenv=${name}`),
-      "/bin/sh", "-c", service.startCommand.replaceAll("$", () => "$$"),
-    ]);
-  } catch (error) {
-    const concurrent = await status(id);
-    if (!["active", "activating"].includes(concurrent.state)) throw error;
-    return concurrent;
-  }
+  await systemd("systemd-run", [
+    "--quiet", `--unit=${id}`, "--service-type=exec", "--remain-after-exit",
+    `--working-directory=${service.path}`, "--property=KillMode=control-group",
+    "--property=KillSignal=SIGINT", "--property=SendSIGKILL=yes",
+    `--property=TimeoutStopSec=${stopTimeoutSeconds}s`, "--property=StandardOutput=journal",
+    "--property=StandardError=journal",
+    `--property=RuntimeMaxSec=${maxRuntimeSeconds}`,
+    `--property=ExecStartPost=systemd-run --user --quiet --collect --unit=${id.slice(0, -8)}-expiry ` +
+      `--on-active=${maxRuntimeSeconds}s --timer-property=AccuracySec=1s --timer-property=RemainAfterElapse=no ` +
+      `--timer-property=PartOf=${id} systemctl --user --no-block stop ${id}`,
+    ...(service.stopCommand === undefined ? [] : [
+      `--property=ExecStopPost=:/bin/sh -c ${JSON.stringify(service.stopCommand)}`,
+    ]),
+    ...environment.map(name => `--setenv=${name}`),
+    "/bin/sh", "-c", service.startCommand.replaceAll("$", () => "$$"),
+  ]);
   let observed = await status(id);
   const deadline = Date.now() + 1_000;
   while (["active", "activating"].includes(observed.state) && observed.subState !== "exited" && Date.now() < deadline) {

@@ -7,7 +7,7 @@ import { selectRepositories } from "./repositories.js";
 import { runService, type Service, type ServiceResult } from "./service-manager.js";
 
 type Selection = { path?: string; service?: string };
-type ServiceSummary = Pick<ServiceResult, "name" | "path" | "state" | "error" | "maxRuntimeSeconds">;
+type ServiceSummary = Pick<ServiceResult, "name" | "path" | "state" | "error" | "maxRuntimeSeconds"> & Partial<Pick<ServiceResult, "id" | "mainPid">>;
 type ServiceOutput = { path: string; services: ServiceSummary[] };
 
 async function selected(input: Selection): Promise<{ path: string; services: Service[] }> {
@@ -26,9 +26,10 @@ async function manage(input: Selection, action: "start" | "stop"): Promise<Servi
   const selection = await selected(input);
   const services: ServiceSummary[] = [];
   for (const service of selection.services) {
-    const { name, path, state, error, maxRuntimeSeconds } = await runService(service, action);
+    const { name, path, id, state, mainPid, error, maxRuntimeSeconds } = await runService(service, action);
     services.push({
       name, path, ...(state !== undefined && { state }), ...(error !== undefined && { error }),
+      ...(action === "start" && error !== undefined && { id, ...(mainPid !== undefined && { mainPid }) }),
       ...(action === "start" && maxRuntimeSeconds !== undefined && { maxRuntimeSeconds }),
     });
   }
@@ -72,10 +73,10 @@ export function registerServerTools(server: McpServer): void {
     "start_server",
     {
       description:
-        "Start configured services using Linux/systemd; reuse active units. Useful for running services needed by end-to-end (E2E) tests. " +
+        "Start configured services using Linux/systemd; already active or activating units return errors with their ID, state and available PID, without restarting them. Useful for running services needed by end-to-end (E2E) tests. " +
         "New services automatically stop after 3 hours, then run stopCommand in the service directory. " +
         "Returns compact states/errors and maxRuntimeSeconds when configured, not readiness. " +
-        "Reusing a unit does not renew its lifetime or add expiry to older units. Use server_logs for diagnostics; stop failed units before restarting.",
+        "Repeated starts do not renew a unit's lifetime or add expiry to older units. Use server_logs for diagnostics; stop failed units before restarting.",
       inputSchema: selectionSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },

@@ -380,17 +380,18 @@ Returns only `path` and `services`.
 Each service contains `name`, `path`, observed `state`, and an optional `error`.
 Startup responses also include `maxRuntimeSeconds: 10800` when the unit has the three-hour runtime limit.
 This is the total lifetime, not the remaining time; older active units without a limit omit this field.
-Instructions, URLs, unit IDs, exit codes, and logs are omitted.
+Startup errors also include the unit `id` and `mainPid` when available.
+Instructions, URLs, exit codes, and logs are omitted.
 Use `server_logs` for diagnostics.
 Read project instructions from disk.
 
 Each service uses a transient systemd user unit.
-Active units are reused across MCP restarts.
+Starting an already active or activating unit returns an error with the existing service's information, without restarting it, including across MCP restarts.
 Stop failed units before restarting them.
 Command and environment changes apply on the next fresh start.
 New units automatically begin shutdown after three hours, independently of the MCP process.
 Systemd enforces `RuntimeMaxSec` and installs an expiry timer at startup to also stop `active (exited)` units.
-Reusing an active unit does not renew its expiry.
+Repeated starts do not renew an active unit's expiry.
 Units started before this policy remain unchanged until stopped and freshly started.
 Manual shutdown cancels the expiry timer, so it cannot stop a later invocation.
 Automatic shutdown uses the same signals and post-stop cleanup as manual shutdown; its grace periods can extend beyond three hours.
