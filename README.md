@@ -378,6 +378,8 @@ Service tools accept `path`, not `repo` or `group`.
 
 Returns only `path` and `services`.
 Each service contains `name`, `path`, observed `state`, and an optional `error`.
+Startup responses also include `maxRuntimeSeconds: 10800` when the unit has the three-hour runtime limit.
+This is the total lifetime, not the remaining time; older active units without a limit omit this field.
 Instructions, URLs, unit IDs, exit codes, and logs are omitted.
 Use `server_logs` for diagnostics.
 Read project instructions from disk.
@@ -386,6 +388,13 @@ Each service uses a transient systemd user unit.
 Active units are reused across MCP restarts.
 Stop failed units before restarting them.
 Command and environment changes apply on the next fresh start.
+New units automatically begin shutdown after three hours, independently of the MCP process.
+Systemd enforces `RuntimeMaxSec` and installs an expiry timer at startup to also stop `active (exited)` units.
+Reusing an active unit does not renew its expiry.
+Units started before this policy remain unchanged until stopped and freshly started.
+Manual shutdown cancels the expiry timer, so it cannot stop a later invocation.
+Automatic shutdown uses the same signals and post-stop cleanup as manual shutdown; its grace periods can extend beyond three hours.
+Runtime-limit expiry can leave a failed unit; stop it before restarting, as for other failures.
 Units are not configured to restart automatically or survive a machine reboot.
 Remaining logged in is normally required.
 Enable user lingering separately to keep services after logout.
@@ -408,6 +417,8 @@ Accepts the same optional `path` (default server cwd) and `service` as `start_se
 Sends SIGINT to all processes in the unit.
 After 30 seconds, remaining processes receive SIGKILL.
 The optional `stopCommand` then runs with its own 30-second timeout.
+It is registered at startup as systemd's `ExecStopPost` and runs in the same service directory as `startCommand`, after supervised processes terminate.
+It also runs on automatic expiry; its failure does not prevent process termination, but external services such as Docker containers may remain if cleanup fails.
 Verifies that systemd reports no main process, control process, or remaining tasks before releasing the unit.
 Missing process-accounting information fails verification when a control group still exists.
 An old `failed` state is cleared with a unit-scoped `reset-failed`, allowing a fresh start.
@@ -416,7 +427,7 @@ Absent units are unchanged.
 Unrelated systemd units cannot be selected.
 Verification covers the selected systemd units; detached external services still require a working `stopCommand`.
 
-Returns the same compact summary as `start_server`.
+Returns the same compact state/error summary as `start_server`, without `maxRuntimeSeconds`.
 Failed cleanup is reported even if the application has stopped.
 Cleanup failures remain errors even when the unit has been released successfully.
 No logs are read and no Git changes are made.

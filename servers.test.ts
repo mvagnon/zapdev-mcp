@@ -26,7 +26,7 @@ test("services return compact actions and scoped journal diagnostics", async () 
   };
   type Service = {
     id: string; name: string; path: string; state: string; exitCode?: number;
-    error?: string; logs?: string; truncated?: boolean;
+    error?: string; logs?: string; truncated?: boolean; maxRuntimeSeconds?: number;
   };
   const units = (): Record<string, Unit> => JSON.parse(readFileSync(stateFile, "utf8"));
   const timestamp = "2026-10-22T10:30:00.123456+0200";
@@ -70,6 +70,8 @@ if (args.includes("show")) {
   console.log("SubState=" + (unit?.state === "active" ? "running" : "dead"));
   console.log("Result=" + (unit?.result ?? "success"));
   console.log("ExecMainStatus=" + (unit?.exitCode ?? (unit?.result === "exit-code" ? 1 : 0)));
+  const runtime = unit?.args.find(arg => arg.startsWith("--property=RuntimeMaxSec="))?.split("=").at(-1);
+  console.log("RuntimeMaxUSec=" + (runtime ? Number(runtime) / 3600 + "h" : "infinity"));
   if (!unit?.missingPid) console.log("MainPID=" + (unit?.remainingPid ?? (unit?.state === "active" ? 123 : 0)));
   console.log("ControlPID=" + (unit?.remainingControlPid ?? 0));
   console.log("TasksCurrent=" + (unit?.remainingTasks ?? (unit?.state === "active" ? 2 : 0)));
@@ -168,7 +170,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.notEqual(started.isError, true, JSON.stringify(started.content));
     assert.deepEqual(started.structuredContent, {
       path: group,
-      services: [{ name: "frontend", path: group, state: "active" }],
+      services: [{ name: "frontend", path: group, state: "active", maxRuntimeSeconds: 10_800 }],
     });
     const details = await client.callTool({ name: "server_logs", arguments: { path: group } });
     assert.notEqual(details.isError, true, JSON.stringify(details.content));
@@ -187,13 +189,32 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.ok(!args.some(arg => arg.startsWith("--property=ExecStop=")));
     assert.ok(args.includes("--property=StandardOutput=journal"));
     assert.ok(args.includes("--property=StandardError=journal"));
+    assert.ok(args.includes(`--working-directory=${group}`));
+    assert.ok(args.includes("--property=RuntimeMaxSec=10800"));
+    assert.ok(args.includes(
+      `--property=ExecStartPost=systemd-run --user --quiet --collect --unit=${service.id.slice(0, -8)}-expiry ` +
+      `--on-active=10800s --timer-property=AccuracySec=1s --timer-property=RemainAfterElapse=no ` +
+      `--timer-property=PartOf=${service.id} systemctl --user --no-block stop ${service.id}`,
+    ));
     assert.equal(existsSync(join(directory, ".zapdev", "services")), false);
 
     const other = await connect();
     const repeated = await other.callTool({ name: "start_server", arguments: { path: group } });
     assert.notEqual(repeated.isError, true, JSON.stringify(repeated.content));
+    assert.deepEqual(repeated.structuredContent, started.structuredContent);
     assert.deepEqual(units()[service.id]!.args, args);
     assert.equal(Object.keys(units()).length, 1);
+    const legacy = units();
+    legacy[service.id]!.args = args.filter(arg => !arg.startsWith("--property=RuntimeMaxSec=") &&
+      !arg.startsWith("--property=ExecStartPost="));
+    writeFileSync(stateFile, JSON.stringify(legacy));
+    const reusedLegacy = await other.callTool({ name: "start_server", arguments: { path: group } });
+    assert.deepEqual(reusedLegacy.structuredContent, {
+      path: group, services: [{ name: "frontend", path: group, state: "active" }],
+    });
+    assert.deepEqual(units()[service.id]!.args, legacy[service.id]!.args);
+    legacy[service.id]!.args = args;
+    writeFileSync(stateFile, JSON.stringify(legacy));
     const groupClient = await connect(group);
     for (const input of [{}, { path: "" }]) {
       for (const name of ["list_services", "server_logs"]) {
@@ -363,7 +384,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal(partialServices.find(({ name }) => name === "good")?.state, "active");
     assert.match(partialServices.find(({ name }) => name === "bad")?.error ?? "", /Start failed/);
     assert.equal(partialServices.find(({ name }) => name === "late")?.state, "failed");
-    assert.ok(partialServices.every(service => Object.keys(service).every(key => ["name", "path", "state", "error"].includes(key))));
+    assert.ok(partialServices.every(service => Object.keys(service).every(key => ["name", "path", "state", "error", "maxRuntimeSeconds"].includes(key))));
     const late = await client.callTool({ name: "server_logs", arguments: { path: group, service: "late" } });
     assert.equal((late.structuredContent?.services as Service[])[0]?.exitCode, 127);
     assert.match((late.structuredContent?.services as Service[])[0]?.logs ?? "", /expo: command not found/);
