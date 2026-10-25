@@ -9,7 +9,7 @@
 ## Project Introduction
 
 **zapdev-mcp** brings [zapdev](https://github.com/mvagnon/zapdev) workflows to your AI assistant.
-Seven stdio tools prepare disposable checkouts, discover and manage services and logs, commit changes, and create pull requests.
+Eight stdio tools prepare disposable checkouts and worktrees, discover and manage services and logs, commit changes, and create pull requests.
 Commit and PR tools use `npx --yes zapdev`.
 No global installation is needed.
 
@@ -18,7 +18,7 @@ No global installation is needed.
 ```mermaid
 flowchart LR
   Client["MCP client"] -->|stdio| Server["index.ts"]
-  Server --> Repos["prepare_repo"]
+  Server --> Repos["prepare_repo / prepare_worktree"]
   Server --> Servers["list_services / start_server / stop_server / server_logs"]
   Servers --> Config["~/.zapdev/config"]
   Servers --> Systemd["systemd user services"]
@@ -31,11 +31,12 @@ flowchart LR
 
 - `index.ts`: MCP server, input validation, repository management, and CLI calls.
 - `repositories.ts`: shared repository paths and input validation.
-- `preparation.ts`: isolated repository and whole-group preparation.
+- `preparation.ts`: shared secret linking and repository/group preparation.
+- `worktrees.ts`: branch-named worktree creation and isolated preparation.
 - `config.ts`: shared repository and group configuration.
 - `servers.ts`: service selection and lifecycle tools.
 - `service-manager.ts`: isolated systemd user units and bounded log access.
-- `index.test.ts` / `servers.test.ts`: repository, service lifecycle, commit, and PR checks.
+- `index.test.ts` / `servers.test.ts` / `worktrees.test.ts`: repository, worktree, service lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
 
 ## Environment Variables
@@ -169,6 +170,62 @@ Ignored files are preserved.
 Never prepare a checkout containing work you want to keep.
 Git authentication must work without prompts.
 
+### `prepare_worktree`
+
+Prepare new branches and linked worktrees from the selected local repositories' current `HEAD`s, then link their secrets and run preparation commands.
+A repository or subdirectory path selects only its enclosing repository, even inside a group.
+Outside a repository, a group path selects its immediate child repositories and worktrees; hidden directories, symlinks, and `node_modules` are excluded.
+An empty selection is rejected.
+Source branches and uncommitted changes are left untouched; only committed files enter the new worktrees.
+This tool does not clone, fetch, reset, or clean source repositories.
+
+| Argument | Required | Description |
+| -------- | -------- | ----------- |
+| `path` | Yes | Absolute source repository, worktree, subdirectory, or group path; no `~` |
+| `branch` | Yes | New branch in every selected repository and workspace name; must not already exist |
+
+Example: `{"path":"/srv/repos/my-group","branch":"feat/search"}`.
+No `repo` or `group` arguments are accepted; selection and secret identity are derived from `path`.
+Returns every created repository path and an explicit instruction to work there, not in the source repositories:
+
+```json
+{
+  "paths": [
+    "/home/user/.zapdev/worktrees/feat/search/owner__frontend",
+    "/home/user/.zapdev/worktrees/feat/search/owner__backend"
+  ],
+  "instructions": "Work exclusively in the returned worktree paths. Do not modify the source repositories."
+}
+```
+
+| Source | New repository path |
+| ------ | ------------------- |
+| Standalone repository | `~/.zapdev/worktrees/<branch>` |
+| Group or single grouped checkout | `~/.zapdev/worktrees/<branch>/owner__repo`, for each selected repository |
+
+Slashes in branch names create nested directories.
+Workspace names are shared across repositories; existing paths, branches, symlinked destination directories, and nesting inside an existing worktree are rejected.
+All selected repositories' branches, HEADs, and destination-name collisions are checked before creating any worktree.
+Creation uses `git worktree add -b <branch> <path> <source-HEAD>` without force, with the same branch name in each repository.
+
+Secret and configuration selection follows the main checkout's layout under `ZD_REPOS_DIR`, even when the source is another linked worktree.
+For repositories outside that root, a GitHub `origin` maps to `owner__repo`; otherwise, the main checkout's directory name is used.
+External repository paths use standalone secrets and configuration; external group paths use the selected group's directory name.
+Secrets remain symlinks to shared source files, not independent copies; keep them Git-ignored.
+
+Secret linking is shared with `prepare_repo`, including group-root files and recursive repository secrets.
+All selected worktrees are created and receive their secrets before any preparation command runs.
+Grouped sources get an isolated workspace root containing group-root secrets and all selected repositories.
+Group configuration takes precedence, and its `prepareCommand` runs once in that workspace root.
+When the group configuration is absent, each repository's command runs inside its own worktree.
+Selecting one grouped repository still prepares only that repository, so a group command requiring siblings may fail.
+Commands retain the 180-second timeout and run with the MCP server's host permissions.
+
+Failures are returned as MCP errors with the completed worktrees' `paths`; created directories, branches, and partial preparation are retained for inspection, not reset or rolled back.
+Do not blindly retry a failed creation.
+PR cleanup removes the linked Git worktree, but a grouped workspace's outer directory and group-root files remain.
+Service tools still select prepared checkouts under `ZD_REPOS_DIR`; this tool does not extend their selection to worktrees.
+
 ### Repository configuration: `zapdev.json`
 
 Store configuration under `~/.zapdev/config`, using the same layout as secrets.
@@ -210,7 +267,7 @@ Malformed files, unknown fields, and source symlinks are rejected.
 
 | Field                          | Meaning                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------- |
-| `prepareCommand`               | Optional nonempty shell command executed by `prepare_repo`                      |
+| `prepareCommand`               | Optional nonempty shell command executed by `prepare_repo` and `prepare_worktree` |
 | `services`                     | Optional object of named services for this checkout or group; `{}` defines none |
 | `services.<name>.startCommand` | Required nonempty shell command for that service                                |
 | `services.<name>.stopCommand`  | Optional nonempty shell command executed after the service's processes stop     |
@@ -364,11 +421,11 @@ Example: `{"path":"/srv/repos/my-group/owner__repo","service":"frontend","lines"
 
 ### `commit`
 
-Commit changes in a local Git repository using zapdev without interactive review.
+Commit changes in the enclosing local Git repository, or a group's immediate child repositories, using zapdev without interactive review.
 
 | Argument | Required | Description                                                                    |
 | -------- | -------- | ------------------------------------------------------------------------------ |
-| `path`   | Yes      | Absolute path inside the local Git repository                                  |
+| `path`   | Yes      | Absolute repository, worktree, subdirectory, or group path                     |
 | `branch` | No       | Local branch to switch to or create; defaults to the current branch            |
 | `type`   | No       | Conventional Commit type; defaults to `auto`; append `!` for a breaking change |
 | `pull`   | No       | Boolean; pull fast-forward updates before committing; defaults to `false`     |
@@ -395,15 +452,16 @@ Gitleaks scanning is skipped when it is not installed.
 
 ### `pr`
 
-Push the current branch and create a GitHub pull request without confirmation.
+Push the current branch and create a GitHub pull request without confirmation for the enclosing repository or a group's immediate child repositories.
 
 | Argument | Required | Description                                                                   |
 | -------- | -------- | ----------------------------------------------------------------------------- |
-| `path`   | Yes      | Absolute path inside the local Git repository                                 |
+| `path`   | Yes      | Absolute repository, worktree, subdirectory, or group path                    |
 | `branch` | No       | PR target branch, not the working branch; defaults to GitHub's default branch |
 | `closes` | No       | HTTP(S) task URL to append as `Closes <url>` in the description               |
 
-Runs `zapdev pr <path> --yes --cleanup-worktrees` with the supplied target branch and task reference, without changing the MCP server's working directory.
+Runs `zapdev pr <path> --yes --cleanup-worktrees --json` with the supplied target branch and task reference, without changing the MCP server's working directory.
+The CLI's JSON result is returned in `stdout`, including PR URLs and deleted/skipped worktree paths; diagnostics remain in `stderr`.
 Requires a clean working tree and authenticated GitHub CLI.
 Full branch commit messages are sent to the configured LLM to generate the title.
 The description is built from the commits.

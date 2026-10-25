@@ -7,15 +7,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { prepareSelection } from "./preparation.js";
-import { git, repositorySelectionSchema } from "./repositories.js";
+import { git, repositorySelectionSchema, selectRepositories } from "./repositories.js";
 import { registerServerTools } from "./servers.js";
+import { prepareWorktree } from "./worktrees.js";
 
 const exec = promisify(execFile);
 
 /** Run zapdev through npx with a repository path, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
   try {
-    await git(path, "rev-parse", "--show-toplevel");
+    await selectRepositories(path);
     if (branch !== undefined) await git(path, "check-ref-format", "--branch", branch);
     const { stdout, stderr } = await exec(
       "npx",
@@ -49,7 +50,7 @@ async function zapdev(path: string, args: [string, ...string[]], branch?: string
 const repositoryPath = z
   .string()
   .refine(isAbsolute, "Expected an absolute repository path.")
-  .describe("Absolute Git repository path (no ~).");
+  .describe("Absolute Git repository, worktree or group directory path (no ~).");
 
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
@@ -90,13 +91,39 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "prepare_worktree",
+  {
+    description:
+      "Prepare linked worktrees under ~/.zapdev/worktrees/<branch> from the selected source HEADs. " +
+      "A repository path selects only that repository, even inside a group; a group path selects its immediate child repositories. " +
+      "Creates the same new branch in every selected repository; never resets sources or overwrites existing branches or paths. " +
+      "Links secrets like prepare_repo, then runs group preparation once or each repository's command when group config is absent. " +
+      "Work exclusively in the returned paths, not source repositories. Secret links share source files; keep them Git-ignored. " +
+      "Failures retain completed worktrees and report their paths; inspect them before retrying.",
+    inputSchema: z.object({
+      path: repositoryPath,
+      branch: z.string().min(1).describe("New local branch and worktree workspace name; / creates nested directories."),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  async (input) => {
+    const output = await prepareWorktree(input);
+    return {
+      ...(output.error !== undefined && { isError: true }),
+      content: [{ type: "text", text: JSON.stringify(output) }],
+      structuredContent: output,
+    };
+  },
+);
+
 registerServerTools(server);
 
 server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes via npx zapdev; pull and push only when requested (both default: false). " +
+      "Commit all changes in the enclosing repository or immediate child repositories via npx zapdev; pull and push only when requested (both default: false). " +
       "Requires ZD_* configuration; sends commit context to the configured LLM.",
     inputSchema: z
       .object({
@@ -134,7 +161,7 @@ server.registerTool(
   "pr",
   {
     description:
-      "Push the branch and create a GitHub PR via npx zapdev. Requires a clean tree, gh auth and ZD_* configuration. " +
+      "Push branches and create GitHub PRs for the enclosing repository or immediate child repositories via npx zapdev --json. Requires clean trees, gh auth and ZD_* configuration. " +
       "Sends commit messages to the LLM. Never force-pushes; check remote state before retrying errors. " +
       "Always enables cleanup of the source branch's linked worktrees after PR creation, including ignored files; " +
       "the MCP server must run outside those worktrees. Preserves the main worktree, branches and commits; never forces removal.",
@@ -155,7 +182,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   async ({ path, branch, closes }) => zapdev(path, [
-    "pr", "--yes", "--cleanup-worktrees",
+    "pr", "--yes", "--cleanup-worktrees", "--json",
     ...(closes ? [`--closes=${closes}`] : []),
   ], branch),
 );

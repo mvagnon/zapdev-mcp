@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { readConfig } from "./config.js";
 import { ensureDirectory, git, repositoryRoot, requireDirectory } from "./repositories.js";
@@ -49,10 +49,22 @@ function linkSelectedSecrets(parent: string, group?: string, checkoutName?: stri
   linkSecrets(checkoutName === undefined ? source : join(source, checkoutName), parent, checkoutName !== undefined);
 }
 
-async function prepareCommand(root: string, path: string, parent = path): Promise<void> {
-  const config = readConfig(root, parent);
-  const command = (config ?? readConfig(root, path))?.prepareCommand;
-  if (command !== undefined) await exec("/bin/sh", ["-c", command], { cwd: config === undefined ? path : parent, timeout: 180_000 });
+/** Link all checkout secrets before running each selected repository or group preparation command once. */
+export async function prepareCheckouts(root: string, checkouts: { source: string; path: string }[]): Promise<void> {
+  const commands = new Map<string, string>();
+  for (const { source, path } of checkouts) {
+    const group = relative(root, dirname(source)) || undefined;
+    const parent = group === undefined ? path : dirname(path);
+    if (group !== undefined) linkSelectedSecrets(parent, group);
+    linkSelectedSecrets(path, group, basename(source));
+    const config = readConfig(root, group === undefined ? source : dirname(source));
+    const command = (config ?? readConfig(root, source))?.prepareCommand;
+    if (command === undefined) continue;
+    const cwd = config === undefined ? path : parent;
+    if (commands.has(cwd) && commands.get(cwd) !== command) throw new Error(`Conflicting preparation commands for ${cwd}`);
+    commands.set(cwd, command);
+  }
+  for (const [cwd, command] of commands) await exec("/bin/sh", ["-c", command], { cwd, timeout: 180_000 });
 }
 
 async function prepareRepository(root: string, repo: string, group?: string, branch?: string): Promise<{ path: string }> {
@@ -94,9 +106,7 @@ async function prepareRepository(root: string, repo: string, group?: string, bra
     await git(path, "rev-parse", "--verify", `${reference}^{commit}`);
     await git(path, "checkout", "--quiet", "--force", "-B", branch, reference);
     await git(path, "clean", "--quiet", "-fd");
-    if (group !== undefined) linkSelectedSecrets(parent, group);
-    linkSelectedSecrets(path, group, checkoutName);
-    await prepareCommand(root, path, group === undefined ? path : parent);
+    await prepareCheckouts(root, [{ source: path, path }]);
     return { path };
   } finally {
     rmdirSync(lock);

@@ -239,6 +239,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
 
 test("commit and pr validate inputs and invoke zapdev through npx without prompts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test space-"));
+  const group = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-group-")));
   const client = new Client({ name: "commit-test", version: "1.0.0" });
   try {
     execFileSync("git", ["init", "--quiet", directory]);
@@ -321,7 +322,7 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "pr", directory, "--yes", "--cleanup-worktrees",
+          "--yes", "zapdev", "pr", directory, "--yes", "--cleanup-worktrees", "--json",
           ...(input.closes ? [`--closes=${input.closes}`] : []),
           ...(input.branch ? [`--branch=${input.branch}`] : []),
         ],
@@ -347,8 +348,19 @@ console.error("scan warning");
         assert.match(JSON.stringify(result.content), /commit failed/);
       }
     }
+    for (const repo of ["front", "back"]) execFileSync("git", ["init", "--quiet", join(group, repo)]);
+    for (const name of ["commit", "pr"]) {
+      const result = await client.callTool({ name, arguments: { path: group } });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      const output = result.structuredContent as { stdout: string };
+      assert.deepEqual(JSON.parse(output.stdout), {
+        args: ["--yes", "zapdev", name, group, "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
+        cwd: realpathSync(process.cwd()),
+      });
+    }
   } finally {
     await client.close();
     rmSync(directory, { recursive: true, force: true });
+    rmSync(group, { recursive: true, force: true });
   }
 });

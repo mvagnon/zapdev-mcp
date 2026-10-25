@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
@@ -60,10 +60,28 @@ export function requireDirectory(path: string): void {
   }
 }
 
-/** List immediate prepared checkouts, excluding hidden directories and symlinks. */
-export function repositoryPaths(parent: string): string[] {
+/** List immediate prepared checkouts, optionally including linked worktrees, excluding hidden directories and symlinks. */
+export function repositoryPaths(parent: string, includeWorktrees = false): string[] {
   return readdirSync(parent, { withFileTypes: true })
-    .filter(entry => entry.isDirectory() && !entry.name.startsWith(".") &&
-      lstatSync(join(parent, entry.name, ".git"), { throwIfNoEntry: false })?.isDirectory())
+    .filter(entry => {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) return false;
+      const metadata = lstatSync(join(parent, entry.name, ".git"), { throwIfNoEntry: false });
+      return metadata?.isDirectory() || (includeWorktrees && metadata?.isFile());
+    })
     .map(entry => join(parent, entry.name)).sort();
+}
+
+/** Select the enclosing Git repository, or a group's immediate repositories and linked worktrees. */
+export async function selectRepositories(path: string): Promise<{ repositories: string[]; group?: string }> {
+  const target = realpathSync(path);
+  requireDirectory(target);
+  for (let ancestor = target; ; ancestor = dirname(ancestor)) {
+    if (lstatSync(join(ancestor, ".git"), { throwIfNoEntry: false })) {
+      return { repositories: [await git(target, "rev-parse", "--show-toplevel")] };
+    }
+    if (ancestor === dirname(ancestor)) break;
+  }
+  const repositories = repositoryPaths(target, true).filter(path => basename(path) !== "node_modules");
+  if (repositories.length === 0) throw new Error(`No Git repository found in ${target} or its immediate children.`);
+  return { repositories, group: basename(target) };
 }
