@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.4.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.3.0...v2.4.0) (2026-10-25)
+
+
+### Features
+
+* **commit-workflow:** Introduce push option for zapdev commit; update tests and docs to support pushing after commit. ([0888b39](https://github.com/mvagnon/zapdev-mcp/commit/0888b397ba670fb4b559be5db75fdc29535d3786))
+* Enable path-aware zapdev invocation and automatically clean up linked worktrees after PR creation. ([3c8912b](https://github.com/mvagnon/zapdev-mcp/commit/3c8912b725784492fdac1892f9d8857fb77a2104))
+* Expose maxRuntimeSeconds for services and include in server responses. ([26db06b](https://github.com/mvagnon/zapdev-mcp/commit/26db06badf9fecc6a2eeceddcc1b25f17a70f46f))
+* **repositories:** Refine repository source resolution to identify a unique source group for path-based tools and adjust worktree preparation. ([d2b9cc6](https://github.com/mvagnon/zapdev-mcp/commit/d2b9cc68a417852543710e2e2e3c28a412bc207d))
+* **servers:** Add list_services tool to list configured services for a prepared checkout or group. ([bfff185](https://github.com/mvagnon/zapdev-mcp/commit/bfff1856d86a2a7ce86795bc8b4f55fd01cb2712))
+* **worktrees:** Add worktree support and tests; integrate with preparation flow ([59a4094](https://github.com/mvagnon/zapdev-mcp/commit/59a40944d5e351938c318103a6479f1358e4d57f))
+
+
+### Bug Fixes
+
+* expose deleted and skipped worktrees in PR results ([afec765](https://github.com/mvagnon/zapdev-mcp/commit/afec765a5cf55eebc3b3e242058e0dedbf317736))
+* **systemd:** Fail start when unit is already running and expose id and mainPid ([6b545c3](https://github.com/mvagnon/zapdev-mcp/commit/6b545c3299f527d87fbd190f62df0ceb2a93ec8c))
+
 ## [2.3.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.2.4...v2.3.0) (2026-10-23)
 
 
