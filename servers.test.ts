@@ -128,6 +128,8 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     for (const path of [first, second, standalone]) {
       execFileSync("git", ["init", "--quiet", path]);
       writeFileSync(join(path, "AGENTS.md"), "Repository instructions");
+      execFileSync("git", ["-C", path, "add", "AGENTS.md"]);
+      execFileSync("git", ["-C", path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "initial"]);
     }
     mkdirSync(join(group, "not-a-repository"));
     mkdirSync(join(config, "owner__first"), { recursive: true });
@@ -216,6 +218,30 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
       }
       assert.equal(units()[service.id]?.state, "active");
     }
+    const workspace = join(directory, ".zapdev", "worktrees", "services-test");
+    const prepared = await client.callTool({ name: "prepare_worktree", arguments: { path: group, branch: "services-test" } });
+    assert.notEqual(prepared.isError, true, JSON.stringify(prepared.content));
+    const workspaceFirst = join(workspace, "owner__first");
+    const workspaceSecond = join(workspace, "owner__second");
+    assert.deepEqual(prepared.structuredContent?.paths, [workspaceFirst, workspaceSecond]);
+    for (const [path, name] of [[workspace, "frontend"], [workspaceFirst, "backend"]]) {
+      const listed = await client.callTool({ name: "list_services", arguments: { path } });
+      assert.notEqual(listed.isError, true, JSON.stringify(listed.content));
+      assert.deepEqual(listed.structuredContent, { path, services: [{ name, path }] });
+      const started = await client.callTool({ name: "start_server", arguments: { path } });
+      assert.notEqual(started.isError, true, JSON.stringify(started.content));
+      const details = await client.callTool({ name: "server_logs", arguments: { path } });
+      const worktreeService = (details.structuredContent?.services as Service[])[0]!;
+      assert.equal(worktreeService.path, path);
+      assert.notEqual(worktreeService.id, service.id);
+      assert.ok(units()[worktreeService.id]!.args.includes(`--working-directory=${path}`));
+      assert.equal((await client.callTool({ name: "stop_server", arguments: { path } })).isError, undefined);
+      assert.equal(units()[service.id]!.state, "active");
+    }
+    mkdirSync(join(workspaceFirst, "src"));
+    const workspaceClient = await connect(join(workspaceFirst, "src"));
+    const workspaceListed = await workspaceClient.callTool({ name: "list_services", arguments: {} });
+    assert.deepEqual(workspaceListed.structuredContent, { path: workspaceFirst, services: [{ name: "backend", path: workspaceFirst }] });
     mkdirSync(join(first, "src"));
     const repositoryClient = await connect(join(first, "src"));
     const fromSubdirectory = await repositoryClient.callTool({ name: "start_server", arguments: {} });
@@ -313,6 +339,10 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
       path: group, services: [{ name: "backend", path: first }, { name: "backend", path: second }],
     });
     assert.deepEqual(units(), beforeListing);
+    const worktreeChildren = await client.callTool({ name: "list_services", arguments: { path: workspace } });
+    assert.deepEqual(worktreeChildren.structuredContent, {
+      path: workspace, services: [{ name: "backend", path: workspaceFirst }, { name: "backend", path: workspaceSecond }],
+    });
     for (const name of ["start_server", "server_logs", "stop_server"]) {
       const children = await client.callTool({ name, arguments: { path: group, service: "backend" } });
       assert.notEqual(children.isError, true, JSON.stringify(children.content));

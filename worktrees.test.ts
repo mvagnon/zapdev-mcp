@@ -10,7 +10,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 test("prepare_worktree selects one repository or all group children and prepares them together", async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-worktrees-")));
   const root = join(directory, "repos");
-  const standalone = join(directory, "source repo");
+  const standalone = join(root, "owner__repo");
+  const outside = join(directory, "outside");
   const grouped = join(root, "my-group", "owner__repo");
   const other = join(root, "my-group", "other__repo");
   const workspaceRoot = join(directory, ".zapdev", "worktrees");
@@ -20,7 +21,7 @@ test("prepare_worktree selects one repository or all group children and prepares
   const instructions = "Work exclusively in the returned worktree paths. Do not modify the source repositories.";
   const git = (path: string, ...args: string[]): string => execFileSync("git", ["-C", path, ...args], { encoding: "utf8" }).trim();
   try {
-    for (const source of [standalone, grouped, other]) {
+    for (const source of [standalone, grouped, other, outside]) {
       mkdirSync(source, { recursive: true });
       git(source, "init", "--quiet", "--initial-branch=main");
       git(source, "remote", "add", "origin", "git@github.com:owner/repo.git");
@@ -53,13 +54,21 @@ test("prepare_worktree selects one repository or all group children and prepares
     }));
 
     const branch = "feat/isolated";
-    const path = join(workspaceRoot, branch);
+    const path = join(workspaceRoot, "feat__isolated");
     const tool = (await client.listTools()).tools.find(tool => tool.name === "prepare_worktree");
     assert.ok(tool);
     assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ["branch", "path"]);
+    mkdirSync(workspaceRoot, { recursive: true });
+    const foreign = join(workspaceRoot, "foreign");
+    git(outside, "worktree", "add", "--quiet", "-b", "foreign", foreign);
+    for (const name of ["commit", "pr", "prepare_worktree", "list_services", "start_server", "stop_server", "server_logs"]) {
+      const result = await client.callTool({ name, arguments: { path: foreign, ...(name === "prepare_worktree" && { branch: "foreign-child" }) } });
+      assert.equal(result.isError, true, `${name} must reject worktrees linked to an unmanaged repository`);
+    }
     const created = await client.callTool({ name: "prepare_worktree", arguments: { path: standalone, branch } });
     assert.notEqual(created.isError, true, JSON.stringify(created.content));
     assert.deepEqual(created.structuredContent, { paths: [path], instructions });
+    assert.equal(existsSync(join(workspaceRoot, "feat")), false);
     assert.equal(git(path, "branch", "--show-current"), branch);
     assert.equal(git(path, "rev-parse", "HEAD"), git(standalone, "rev-parse", "HEAD"));
     assert.equal(readFileSync(join(path, "tracked.txt"), "utf8"), "committed");
@@ -97,13 +106,13 @@ test("prepare_worktree selects one repository or all group children and prepares
     }));
     mkdirSync(join(group, "not-a-repo"));
     symlinkSync(standalone, join(group, "linked-repo"));
-    const all = await client.callTool({ name: "prepare_worktree", arguments: { path: group, branch: "all-repos" } });
+    const all = await client.callTool({ name: "prepare_worktree", arguments: { path: group, branch: "feat/all-repos" } });
     assert.notEqual(all.isError, true, JSON.stringify(all.content));
-    const allPaths = ["other__repo", "owner__repo"].map(name => join(workspaceRoot, "all-repos", name));
+    const allPaths = ["other__repo", "owner__repo"].map(name => join(workspaceRoot, "feat__all-repos", name));
     assert.deepEqual(all.structuredContent, { paths: allPaths, instructions });
-    assert.equal(readFileSync(join(workspaceRoot, "all-repos", "prepared"), "utf8"), "group");
+    assert.equal(readFileSync(join(workspaceRoot, "feat__all-repos", "prepared"), "utf8"), "group");
     for (const path of allPaths) {
-      assert.equal(git(path, "branch", "--show-current"), "all-repos");
+      assert.equal(git(path, "branch", "--show-current"), "feat/all-repos");
       assert.equal(readFileSync(join(path, "tracked.txt"), "utf8"), "committed");
     }
     assert.equal(readFileSync(join(other, "tracked.txt"), "utf8"), "source edits must survive");
@@ -126,11 +135,12 @@ test("prepare_worktree selects one repository or all group children and prepares
 
     mkdirSync(join(workspaceRoot, "existing"));
     writeFileSync(join(workspaceRoot, "existing", "keep"), "untouched");
-    symlinkSync(standalone, join(workspaceRoot, "alias"));
+    symlinkSync(standalone, join(workspaceRoot, "alias__child"));
     git(standalone, "branch", "existing-branch");
     for (const input of [
       { branch: "existing" },
       { branch: "existing-branch" },
+      { branch: "feat__isolated" },
       { branch: "alias/child" },
       { branch: "feat/isolated/nested" },
       { branch: "../escape" },
@@ -146,6 +156,7 @@ test("prepare_worktree selects one repository or all group children and prepares
     }
     assert.equal(readFileSync(join(workspaceRoot, "existing", "keep"), "utf8"), "untouched");
     assert.equal(existsSync(join(standalone, "child")), false);
+    assert.equal(git(standalone, "branch", "--list", "--", "feat__isolated"), "");
 
     writeFileSync(join(config, "owner__repo", "zapdev.json"), JSON.stringify({ prepareCommand: "printf failure >&2; exit 1" }));
     const failure = await client.callTool({ name: "prepare_worktree", arguments: { path: standalone, branch: "failed-prepare" } });
@@ -154,6 +165,10 @@ test("prepare_worktree selects one repository or all group children and prepares
     assert.match(JSON.stringify(failure.content), /failed-prepare/);
     assert.deepEqual(failure.structuredContent?.paths, [join(workspaceRoot, "failed-prepare")]);
     assert.equal(git(join(workspaceRoot, "failed-prepare"), "branch", "--show-current"), "failed-prepare");
+    git(standalone, "worktree", "remove", "--", path);
+    assert.equal(existsSync(path), false);
+    assert.equal(git(standalone, "branch", "--list", "--", branch), branch);
+    assert.equal(readFileSync(join(secrets, "owner__repo", ".env"), "utf8"), "PRIVATE=value");
   } finally {
     await client.close();
     rmSync(directory, { recursive: true, force: true });

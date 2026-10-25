@@ -16,7 +16,9 @@ const exec = promisify(execFile);
 /** Run zapdev through npx with a repository path, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
   try {
-    await selectRepositories(path);
+    const selection = await selectRepositories(path);
+    if (selection.repositories.length === 0) throw new Error(`No Git repository found in ${selection.path} or its immediate children.`);
+    path = selection.path;
     if (branch !== undefined) await git(path, "check-ref-format", "--branch", branch);
     const { stdout, stderr } = await exec(
       "npx",
@@ -50,7 +52,7 @@ async function zapdev(path: string, args: [string, ...string[]], branch?: string
 const repositoryPath = z
   .string()
   .refine(isAbsolute, "Expected an absolute repository path.")
-  .describe("Absolute Git repository, worktree or group directory path (no ~).");
+  .describe("Absolute Git repository, worktree or group path inside ZD_REPOS_DIR or ~/.zapdev/worktrees (no ~).");
 
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
@@ -95,7 +97,7 @@ server.registerTool(
   "prepare_worktree",
   {
     description:
-      "Prepare linked worktrees under ~/.zapdev/worktrees/<branch> from the selected source HEADs. " +
+      "Prepare linked worktrees under ~/.zapdev/worktrees/<branch with / replaced by __> from the selected source HEADs. " +
       "A repository path selects only that repository, even inside a group; a group path selects its immediate child repositories. " +
       "Creates the same new branch in every selected repository; never resets sources or overwrites existing branches or paths. " +
       "Links secrets like prepare_repo, then runs group preparation once or each repository's command when group config is absent. " +
@@ -103,7 +105,7 @@ server.registerTool(
       "Failures retain completed worktrees and report their paths; inspect them before retrying.",
     inputSchema: z.object({
       path: repositoryPath,
-      branch: z.string().min(1).describe("New local branch and worktree workspace name; / creates nested directories."),
+      branch: z.string().min(1).describe("New local branch; its workspace directory replaces / with __ without changing the branch name."),
     }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
@@ -60,28 +60,85 @@ export function requireDirectory(path: string): void {
   }
 }
 
-/** List immediate prepared checkouts, optionally including linked worktrees, excluding hidden directories and symlinks. */
-export function repositoryPaths(parent: string, includeWorktrees = false): string[] {
+/** Resolve the directory containing branch-named worktree workspaces. */
+export function worktreeRoot(): string {
+  return join(homedir(), ".zapdev", "worktrees");
+}
+
+function contains(root: string, path: string): boolean {
+  const part = relative(root, path);
+  return !isAbsolute(part) && part !== ".." && !part.startsWith(`..${sep}`);
+}
+
+function managedDirectory(path: string): string {
+  const target = resolve(path);
+  for (const root of [repositoryRoot(), worktreeRoot()]) {
+    const canonical = lstatSync(root, { throwIfNoEntry: false })?.isDirectory() ? realpathSync(root) : resolve(root);
+    const boundary = [resolve(root), canonical].find(root => contains(root, target));
+    if (boundary === undefined) continue;
+    if (root === worktreeRoot()) requireDirectory(join(homedir(), ".zapdev"));
+    requireDirectory(root);
+    let directory = boundary;
+    for (const part of relative(boundary, target).split(sep).filter(Boolean)) {
+      directory = join(directory, part);
+      requireDirectory(directory);
+    }
+    const actual = realpathSync(target);
+    if (contains(canonical, actual)) return actual;
+  }
+  throw new Error("Path must be inside ZD_REPOS_DIR or ~/.zapdev/worktrees; directory symlinks are not allowed.");
+}
+
+/** List immediate Git repositories and linked worktrees, excluding symlinked directories and node_modules. */
+function repositoryPaths(parent: string): string[] {
   return readdirSync(parent, { withFileTypes: true })
     .filter(entry => {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) return false;
+      if (!entry.isDirectory() || entry.name === "node_modules" || entry.name === ".git") return false;
       const metadata = lstatSync(join(parent, entry.name, ".git"), { throwIfNoEntry: false });
-      return metadata?.isDirectory() || (includeWorktrees && metadata?.isFile());
+      if (metadata?.isSymbolicLink()) throw new Error(`Refusing symlinked Git metadata: ${join(parent, entry.name)}`);
+      return metadata?.isDirectory() || metadata?.isFile();
     })
     .map(entry => join(parent, entry.name)).sort();
 }
 
-/** Select the enclosing Git repository, or a group's immediate repositories and linked worktrees. */
-export async function selectRepositories(path: string): Promise<{ repositories: string[]; group?: string }> {
-  const target = realpathSync(path);
-  requireDirectory(target);
+type Repository = { path: string; source: string };
+
+/** A managed target and its original configuration identity, shared by Git, preparation, and service tools. */
+export type RepositorySelection = Repository & { root: string; isRepository: boolean; repositories: Repository[] };
+
+async function repository(path: string, root: string): Promise<Repository> {
+  path = managedDirectory(path);
+  const metadata = lstatSync(join(path, ".git"));
+  if (!metadata.isDirectory() && !metadata.isFile()) throw new Error(`Invalid Git metadata: ${path}`);
+  if (await git(path, "rev-parse", "--show-toplevel") !== path) throw new Error(`Git worktree does not match its path: ${path}`);
+  let source = path;
+  if (metadata.isFile()) {
+    const record = (await git(path, "worktree", "list", "--porcelain", "-z")).split("\0", 1)[0];
+    if (!record?.startsWith("worktree ")) throw new Error(`Cannot identify the source repository: ${path}`);
+    source = managedDirectory(record.slice("worktree ".length));
+  }
+  if (source === root || !contains(root, source)) throw new Error(`Repository source must be below ZD_REPOS_DIR: ${source}`);
+  return { path, source };
+}
+
+/** Resolve one enclosing repository or a group's immediate children, enforcing managed paths and worktree provenance. */
+export async function selectRepositories(path = process.cwd()): Promise<RepositorySelection> {
+  const target = managedDirectory(path);
+  const root = realpathSync(repositoryRoot());
   for (let ancestor = target; ; ancestor = dirname(ancestor)) {
     if (lstatSync(join(ancestor, ".git"), { throwIfNoEntry: false })) {
-      return { repositories: [await git(target, "rev-parse", "--show-toplevel")] };
+      const selected = await repository(ancestor, root);
+      return { ...selected, root, isRepository: true, repositories: [selected] };
     }
     if (ancestor === dirname(ancestor)) break;
   }
-  const repositories = repositoryPaths(target, true).filter(path => basename(path) !== "node_modules");
-  if (repositories.length === 0) throw new Error(`No Git repository found in ${target} or its immediate children.`);
-  return { repositories, group: basename(target) };
+  const repositories = await Promise.all(repositoryPaths(target).map(path => repository(path, root)));
+  let source = target;
+  if (!contains(root, target) || repositories.some(repository => repository.path !== repository.source)) {
+    const parents = new Set(repositories.map(({ source }) => dirname(source)));
+    const [parent] = parents;
+    if (parents.size !== 1 || parent === undefined) throw new Error(`Cannot identify a unique source group: ${target}`);
+    source = parent;
+  }
+  return { root, path: target, source, isRepository: false, repositories };
 }

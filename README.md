@@ -30,7 +30,7 @@ flowchart LR
 ```
 
 - `index.ts`: MCP server, input validation, repository management, and CLI calls.
-- `repositories.ts`: shared repository paths and input validation.
+- `repositories.ts`: shared managed-path validation, repository/group selection, and worktree source resolution for all path-based tools.
 - `preparation.ts`: shared secret linking and repository/group preparation.
 - `worktrees.ts`: branch-named worktree creation and isolated preparation.
 - `config.ts`: shared repository and group configuration.
@@ -103,6 +103,22 @@ The server runs on the client's host, not in a sandbox.
 
 ## Usage
 
+### Shared path selection
+
+All path-based tools use the same resolver: `prepare_worktree`, `commit`, `pr`, `list_services`, `start_server`, `stop_server`, and `server_logs`.
+Paths must be inside `ZD_REPOS_DIR` (default `~/.zapdev/repos`) or `~/.zapdev/worktrees`.
+Repositories and linked worktrees must have their main checkout below `ZD_REPOS_DIR`; placing an unrelated checkout under the worktree directory does not grant access.
+Outside paths, directory symlinks below either root, and symlinked Git metadata are rejected before invoking commands.
+
+- A repository or subdirectory path selects only its enclosing repository, even inside a group.
+- A group path selects immediate child repositories and worktrees, without recursion; symlinked directories and `node_modules` are excluded.
+- A worktree uses its main checkout's configuration identity; a worktree group must resolve to one source group.
+- Git commands and preparation reject empty groups; service tools may use a configured group with no repositories.
+
+For services, an existing group configuration takes precedence over child configurations, including an empty configuration.
+Worktree services run in the selected worktree or workspace directory and have distinct units from the source checkout.
+These path checks are not an OS sandbox: trusted preparation commands, services, and Git hooks still run with host permissions.
+
 ### `prepare_repo`
 
 Clone or refresh a GitHub repository in `~/.zapdev/repos/<owner>__<repo>`.
@@ -174,7 +190,7 @@ Git authentication must work without prompts.
 
 Prepare new branches and linked worktrees from the selected local repositories' current `HEAD`s, then link their secrets and run preparation commands.
 A repository or subdirectory path selects only its enclosing repository, even inside a group.
-Outside a repository, a group path selects its immediate child repositories and worktrees; hidden directories, symlinks, and `node_modules` are excluded.
+Outside a repository, a group path selects its immediate child repositories and worktrees using the shared path selection above.
 An empty selection is rejected.
 Source branches and uncommitted changes are left untouched; only committed files enter the new worktrees.
 This tool does not clone, fetch, reset, or clean source repositories.
@@ -191,8 +207,8 @@ Returns every created repository path and an explicit instruction to work there,
 ```json
 {
   "paths": [
-    "/home/user/.zapdev/worktrees/feat/search/owner__frontend",
-    "/home/user/.zapdev/worktrees/feat/search/owner__backend"
+    "/home/user/.zapdev/worktrees/feat__search/owner__frontend",
+    "/home/user/.zapdev/worktrees/feat__search/owner__backend"
   ],
   "instructions": "Work exclusively in the returned worktree paths. Do not modify the source repositories."
 }
@@ -200,17 +216,18 @@ Returns every created repository path and an explicit instruction to work there,
 
 | Source | New repository path |
 | ------ | ------------------- |
-| Standalone repository | `~/.zapdev/worktrees/<branch>` |
-| Group or single grouped checkout | `~/.zapdev/worktrees/<branch>/owner__repo`, for each selected repository |
+| Standalone repository | `~/.zapdev/worktrees/<workspace>` |
+| Group or single grouped checkout | `~/.zapdev/worktrees/<workspace>/owner__repo`, for each selected repository |
 
-Slashes in branch names create nested directories.
+The workspace name replaces every `/` in the branch name with `__`: branch `feat/search` uses directory `feat__search`.
+Branch names are unchanged, and existing worktrees are not moved.
+Names such as `feat/search` and `feat__search` collide on the same workspace directory; an existing directory is never overwritten.
 Workspace names are shared across repositories; existing paths, branches, symlinked destination directories, and nesting inside an existing worktree are rejected.
 All selected repositories' branches, HEADs, and destination-name collisions are checked before creating any worktree.
 Creation uses `git worktree add -b <branch> <path> <source-HEAD>` without force, with the same branch name in each repository.
 
 Secret and configuration selection follows the main checkout's layout under `ZD_REPOS_DIR`, even when the source is another linked worktree.
-For repositories outside that root, a GitHub `origin` maps to `owner__repo`; otherwise, the main checkout's directory name is used.
-External repository paths use standalone secrets and configuration; external group paths use the selected group's directory name.
+External source repositories are rejected, including linked worktrees whose main checkout is outside `ZD_REPOS_DIR`.
 Secrets remain symlinks to shared source files, not independent copies; keep them Git-ignored.
 
 Secret linking is shared with `prepare_repo`, including group-root files and recursive repository secrets.
@@ -224,7 +241,7 @@ Commands retain the 180-second timeout and run with the MCP server's host permis
 Failures are returned as MCP errors with the completed worktrees' `paths`; created directories, branches, and partial preparation are retained for inspection, not reset or rolled back.
 Do not blindly retry a failed creation.
 PR cleanup removes the linked Git worktree, but a grouped workspace's outer directory and group-root files remain.
-Service tools still select prepared checkouts under `ZD_REPOS_DIR`; this tool does not extend their selection to worktrees.
+The returned paths can also be used with service tools; stop worktree services before PR cleanup removes their working directories.
 
 ### Repository configuration: `zapdev.json`
 
@@ -315,13 +332,13 @@ This read-only tool does not require Linux or systemd and does not check readine
 
 ### `start_server`
 
-Start a prepared repository or group and return compact service states.
-No Git operations are performed.
-Call `prepare_repo` first.
+Start a prepared repository, worktree, or group and return compact service states.
+Read-only Git inspection resolves linked worktrees; no Git changes are made.
+Prepare checkouts with `prepare_repo` or worktrees with `prepare_worktree` first.
 
 | Argument  | Required | Description                                                                                                                       |
 | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `path`    | No       | Absolute path inside a prepared checkout, a group directory, or `ZD_REPOS_DIR` itself; defaults to the server's working directory |
+| `path`    | No       | Absolute repository, worktree, subdirectory, or group path under either managed root; defaults to the server's working directory |
 | `service` | No       | Configured service name; otherwise selects all services                                                                           |
 
 With `ZD_REPOS_DIR=/srv/repos`:
@@ -335,7 +352,7 @@ Selecting `ZD_REPOS_DIR` itself uses its configuration if present, otherwise its
 Nested groups are not traversed.
 
 **The default cwd belongs to the server process, not your MCP client's active folder.**
-Paths must remain inside `ZD_REPOS_DIR`.
+Paths must remain inside `ZD_REPOS_DIR` or `~/.zapdev/worktrees`, following the shared path selection above.
 Outside paths and symlinked directories are rejected.
 When using `npm run inspect` from this source repository, supply `path` explicitly.
 Omitted and empty `path` values both use the server cwd.

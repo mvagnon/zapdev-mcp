@@ -239,10 +239,15 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
 
 test("commit and pr validate inputs and invoke zapdev through npx without prompts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test space-"));
-  const group = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-group-")));
+  const root = join(directory, "repos");
+  const repository = join(root, "repo");
+  const group = join(root, "group");
+  const outside = join(directory, "outside");
   const client = new Client({ name: "commit-test", version: "1.0.0" });
   try {
-    execFileSync("git", ["init", "--quiet", directory]);
+    execFileSync("git", ["init", "--quiet", repository]);
+    execFileSync("git", ["init", "--quiet", outside]);
+    symlinkSync(outside, join(root, "escape"));
     writeFileSync(
       join(directory, "npx"),
       `#!${process.execPath}
@@ -258,8 +263,15 @@ console.error("scan warning");
     await client.connect(new StdioClientTransport({
       command: process.execPath,
       args: ["--import", "tsx", "index.ts"],
-      env: { PATH: `${directory}:${process.env.PATH}` },
+      env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, ZD_REPOS_DIR: root },
     }));
+
+    for (const name of ["commit", "pr", "prepare_worktree", "list_services", "start_server", "stop_server", "server_logs"]) {
+      for (const path of [outside, join(root, "escape")]) {
+        const result = await client.callTool({ name, arguments: { path, ...(name === "prepare_worktree" && { branch: "outside" }) } });
+        assert.equal(result.isError, true, `${name} must reject ${path}`);
+      }
+    }
 
     for (const { type, branch, pull, push } of [
       { type: undefined, branch: undefined },
@@ -274,13 +286,13 @@ console.error("scan warning");
     ]) {
       const result = await client.callTool({
         name: "commit",
-        arguments: { path: directory, ...(branch && { branch }), ...(type && { type }), ...(pull !== undefined && { pull }), ...(push !== undefined && { push }) },
+        arguments: { path: repository, ...(branch && { branch }), ...(type && { type }), ...(pull !== undefined && { pull }), ...(push !== undefined && { push }) },
       });
       assert.notEqual(result.isError, true);
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "commit", directory, "--yes", push ? "--push" : "--no-push",
+          "--yes", "zapdev", "commit", realpathSync(repository), "--yes", push ? "--push" : "--no-push",
           ...(pull ? ["--pull"] : []),
           ...(type === "fix!" ? ["--type=fix!"] : []),
           ...(branch ? [`--branch=${branch}`] : []),
@@ -300,7 +312,7 @@ console.error("scan warning");
     ]) {
       const result = await client.callTool({
         name: "commit",
-        arguments: { path: directory, branch: "feat/example", ...input },
+        arguments: { path: repository, branch: "feat/example", ...input },
       });
       assert.equal(result.isError, true);
       if (input.branch === "fail") {
@@ -316,13 +328,13 @@ console.error("scan warning");
     ]) {
       const result = await client.callTool({
         name: "pr",
-        arguments: { path: directory, ...input },
+        arguments: { path: repository, ...input },
       });
       assert.notEqual(result.isError, true);
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          "--yes", "zapdev", "pr", directory, "--yes", "--cleanup-worktrees", "--json",
+          "--yes", "zapdev", "pr", realpathSync(repository), "--yes", "--cleanup-worktrees", "--json",
           ...(input.closes ? [`--closes=${input.closes}`] : []),
           ...(input.branch ? [`--branch=${input.branch}`] : []),
         ],
@@ -341,7 +353,7 @@ console.error("scan warning");
     ]) {
       const result = await client.callTool({
         name: "pr",
-        arguments: { path: directory, ...input },
+        arguments: { path: repository, ...input },
       });
       assert.equal(result.isError, true);
       if (input.branch === "fail") {
@@ -354,13 +366,12 @@ console.error("scan warning");
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const output = result.structuredContent as { stdout: string };
       assert.deepEqual(JSON.parse(output.stdout), {
-        args: ["--yes", "zapdev", name, group, "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
+        args: ["--yes", "zapdev", name, realpathSync(group), "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
         cwd: realpathSync(process.cwd()),
       });
     }
   } finally {
     await client.close();
     rmSync(directory, { recursive: true, force: true });
-    rmSync(group, { recursive: true, force: true });
   }
 });
