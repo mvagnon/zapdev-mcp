@@ -18,7 +18,6 @@ test("prepare_worktree selects one repository or all group children and prepares
   const secrets = join(directory, ".zapdev", "secrets");
   const config = join(directory, ".zapdev", "config");
   const client = new Client({ name: "worktree-test", version: "1.0.0" });
-  const instructions = "Work exclusively in the returned worktree paths. Do not modify the source repositories.";
   const git = (path: string, ...args: string[]): string => execFileSync("git", ["-C", path, ...args], { encoding: "utf8" }).trim();
   try {
     for (const source of [standalone, grouped, other, outside]) {
@@ -85,7 +84,7 @@ test("prepare_worktree selects one repository or all group children and prepares
     }
     const created = await client.callTool({ name: "prepare_worktree", arguments: { path: standalone, branch } });
     assert.notEqual(created.isError, true, JSON.stringify(created.content));
-    assert.deepEqual(created.structuredContent, { paths: [path], instructions });
+    assert.deepEqual(created.structuredContent, { paths: [path] });
     assert.equal(existsSync(join(workspaceRoot, "feat")), false);
     assert.equal(git(path, "branch", "--show-current"), branch);
     assert.equal(git(path, "rev-parse", "HEAD"), git(standalone, "rev-parse", "HEAD"));
@@ -101,7 +100,7 @@ test("prepare_worktree selects one repository or all group children and prepares
     const groupedPath = join(groupedWorkspace, "owner__repo");
     const groupResult = await client.callTool({ name: "prepare_worktree", arguments: { path: grouped, branch: "grouped" } });
     assert.notEqual(groupResult.isError, true, JSON.stringify(groupResult.content));
-    assert.deepEqual(groupResult.structuredContent, { paths: [groupedPath], instructions });
+    assert.deepEqual(groupResult.structuredContent, { paths: [groupedPath] });
     assert.equal(readFileSync(join(groupedWorkspace, "prepared"), "utf8"), "group");
     assert.equal(readlinkSync(join(groupedWorkspace, "shared.json")), join(secrets, "my-group", "shared.json"));
     assert.equal(readlinkSync(join(groupedPath, ".env")), join(secrets, "my-group", "owner__repo", ".env"));
@@ -127,7 +126,7 @@ test("prepare_worktree selects one repository or all group children and prepares
     const all = await client.callTool({ name: "prepare_worktree", arguments: { path: group, branch: "feat/all-repos" } });
     assert.notEqual(all.isError, true, JSON.stringify(all.content));
     const allPaths = ["other__repo", "owner__repo"].map(name => join(workspaceRoot, "feat__all-repos", name));
-    assert.deepEqual(all.structuredContent, { paths: allPaths, instructions });
+    assert.deepEqual(all.structuredContent, { paths: allPaths });
     assert.equal(readFileSync(join(workspaceRoot, "feat__all-repos", "prepared"), "utf8"), "group");
     for (const path of allPaths) {
       assert.equal(git(path, "branch", "--show-current"), "feat/all-repos");
@@ -146,7 +145,7 @@ test("prepare_worktree selects one repository or all group children and prepares
     writeFileSync(groupConfig, "{}");
     const nested = await client.callTool({ name: "prepare_worktree", arguments: { path: join(grouped, "nested"), branch: "from-subdirectory" } });
     assert.notEqual(nested.isError, true, JSON.stringify(nested.content));
-    assert.deepEqual(nested.structuredContent, { paths: [join(workspaceRoot, "from-subdirectory", "owner__repo")], instructions });
+    assert.deepEqual(nested.structuredContent, { paths: [join(workspaceRoot, "from-subdirectory", "owner__repo")] });
 
     const empty = join(root, "empty");
     mkdirSync(empty);
@@ -182,6 +181,7 @@ test("prepare_worktree selects one repository or all group children and prepares
     assert.match(JSON.stringify(failure.content), /failure/);
     assert.match(JSON.stringify(failure.content), /failed-prepare/);
     assert.deepEqual(failure.structuredContent?.paths, [join(workspaceRoot, "failed-prepare")]);
+    assert.equal(Object.hasOwn(failure.structuredContent!, "instructions"), false);
     assert.equal(git(join(workspaceRoot, "failed-prepare"), "branch", "--show-current"), "failed-prepare");
     git(standalone, "worktree", "remove", "--", path);
     assert.equal(existsSync(path), false);

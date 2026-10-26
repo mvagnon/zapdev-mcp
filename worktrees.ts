@@ -6,7 +6,7 @@ import { ensureDirectory, git, selectRepositories, worktreeRoot } from "./reposi
 
 /** Prepare branch-named worktrees for one repository or a group's immediate children without resetting sources. */
 export async function prepareWorktree({ path, branch }: { path: string; branch: string }): Promise<{
-  paths: string[]; instructions: string; error?: string;
+  paths: string[]; error?: string;
 }> {
   const paths: string[] = [];
   const workspace = join(worktreeRoot(), branch.replaceAll("/", "__"));
@@ -34,11 +34,10 @@ export async function prepareWorktree({ path, branch }: { path: string; branch: 
       paths.push(checkout.path);
     }
     await prepareCheckouts(root, checkouts);
-    return { paths, instructions: "Work exclusively in the returned worktree paths. Do not modify the source repositories." };
+    return { paths };
   } catch (error) {
     return {
       paths,
-      instructions: "Preparation failed. Inspect retained worktree paths and files before continuing; do not modify the source repositories or retry blindly.",
       error: `Worktree preparation failed at ${workspace}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }

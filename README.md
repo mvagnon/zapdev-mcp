@@ -226,15 +226,14 @@ This tool does not clone, fetch, reset, or clean source repositories.
 
 Example: `{"path":"/srv/repos/my-group","branch":"feat/search"}`.
 No `repo` or `group` arguments are accepted; selection and secret identity are derived from `path`.
-Returns every created repository path and an explicit instruction to work there, not in the source repositories:
+Returns every created repository path:
 
 ```json
 {
   "paths": [
     "/home/user/.zapdev/worktrees/feat__search/owner__frontend",
     "/home/user/.zapdev/worktrees/feat__search/owner__backend"
-  ],
-  "instructions": "Work exclusively in the returned worktree paths. Do not modify the source repositories."
+  ]
 }
 ```
 

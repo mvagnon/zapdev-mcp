@@ -137,7 +137,7 @@ server.registerTool(
       "A repository path selects only that repository, even inside a group; a group path selects its immediate child repositories. " +
       "Creates the same new branch in every selected repository; never resets sources or overwrites existing branches or paths. " +
       "For sources below ZD_REPOS_DIR, links secrets like prepare_repo, then runs group preparation once or each repository's command when group config is absent; external sources skip secrets and preparation commands. " +
-      "Work exclusively in the returned paths, not source repositories. Secret links share source files; keep them Git-ignored. " +
+      "Returns the created worktree paths. Secret links share source files; keep them Git-ignored. " +
       "Failures retain completed worktrees and report their paths; inspect them before retrying.",
     inputSchema: z.object({
       path: repositoryPath,
