@@ -65,28 +65,10 @@ export function worktreeRoot(): string {
   return join(homedir(), ".zapdev", "worktrees");
 }
 
-function contains(root: string, path: string): boolean {
+/** Return a checkout's relative configuration identity, or undefined when outside the checkout root. */
+export function repositoryRelativePath(root: string, path: string): string | undefined {
   const part = relative(root, path);
-  return !isAbsolute(part) && part !== ".." && !part.startsWith(`..${sep}`);
-}
-
-function managedDirectory(path: string): string {
-  const target = resolve(path);
-  for (const root of [repositoryRoot(), worktreeRoot()]) {
-    const canonical = lstatSync(root, { throwIfNoEntry: false })?.isDirectory() ? realpathSync(root) : resolve(root);
-    const boundary = [resolve(root), canonical].find(root => contains(root, target));
-    if (boundary === undefined) continue;
-    if (root === worktreeRoot()) requireDirectory(join(homedir(), ".zapdev"));
-    requireDirectory(root);
-    let directory = boundary;
-    for (const part of relative(boundary, target).split(sep).filter(Boolean)) {
-      directory = join(directory, part);
-      requireDirectory(directory);
-    }
-    const actual = realpathSync(target);
-    if (contains(canonical, actual)) return actual;
-  }
-  throw new Error("Path must be inside ZD_REPOS_DIR or ~/.zapdev/worktrees; directory symlinks are not allowed.");
+  return !isAbsolute(part) && part !== ".." && !part.startsWith(`..${sep}`) ? part : undefined;
 }
 
 /** List immediate Git repositories and linked worktrees, excluding symlinked directories and node_modules. */
@@ -103,11 +85,10 @@ function repositoryPaths(parent: string): string[] {
 
 type Repository = { path: string; source: string };
 
-/** A managed target and its original configuration identity, shared by Git, preparation, and service tools. */
-export type RepositorySelection = Repository & { root: string; isRepository: boolean; repositories: Repository[] };
+/** A target and its source configuration identity; mixed source groups have no shared identity. */
+export type RepositorySelection = { path: string; source: string | undefined; root: string; isRepository: boolean; repositories: Repository[] };
 
-async function repository(path: string, root: string): Promise<Repository> {
-  path = managedDirectory(path);
+async function repository(path: string): Promise<Repository> {
   const metadata = lstatSync(join(path, ".git"));
   if (!metadata.isDirectory() && !metadata.isFile()) throw new Error(`Invalid Git metadata: ${path}`);
   if (await git(path, "rev-parse", "--show-toplevel") !== path) throw new Error(`Git worktree does not match its path: ${path}`);
@@ -115,30 +96,32 @@ async function repository(path: string, root: string): Promise<Repository> {
   if (metadata.isFile()) {
     const record = (await git(path, "worktree", "list", "--porcelain", "-z")).split("\0", 1)[0];
     if (!record?.startsWith("worktree ")) throw new Error(`Cannot identify the source repository: ${path}`);
-    source = managedDirectory(record.slice("worktree ".length));
+    source = record.slice("worktree ".length);
+    requireDirectory(source);
+    source = realpathSync(source);
   }
-  if (source === root || !contains(root, source)) throw new Error(`Repository source must be below ZD_REPOS_DIR: ${source}`);
   return { path, source };
 }
 
-/** Resolve one enclosing repository or a group's immediate children, enforcing managed paths and worktree provenance. */
+/** Resolve any enclosing Git repository or immediate child repositories, retaining source identities for configuration. */
 export async function selectRepositories(path = process.cwd()): Promise<RepositorySelection> {
-  const target = managedDirectory(path);
-  const root = realpathSync(repositoryRoot());
+  requireDirectory(resolve(path));
+  const target = realpathSync(path);
+  const configuredRoot = repositoryRoot();
+  const root = lstatSync(configuredRoot, { throwIfNoEntry: false })?.isDirectory() ? realpathSync(configuredRoot) : resolve(configuredRoot);
   for (let ancestor = target; ; ancestor = dirname(ancestor)) {
     if (lstatSync(join(ancestor, ".git"), { throwIfNoEntry: false })) {
-      const selected = await repository(ancestor, root);
+      const selected = await repository(ancestor);
       return { ...selected, root, isRepository: true, repositories: [selected] };
     }
     if (ancestor === dirname(ancestor)) break;
   }
-  const repositories = await Promise.all(repositoryPaths(target).map(path => repository(path, root)));
-  let source = target;
-  if (!contains(root, target) || repositories.some(repository => repository.path !== repository.source)) {
+  const repositories = await Promise.all(repositoryPaths(target).map(repository));
+  let source: string | undefined = target;
+  if (repositories.some(repository => repository.path !== repository.source)) {
     const parents = new Set(repositories.map(({ source }) => dirname(source)));
     const [parent] = parents;
-    if (parents.size !== 1 || parent === undefined) throw new Error(`Cannot identify a unique source group: ${target}`);
-    source = parent;
+    source = parents.size === 1 ? parent : undefined;
   }
   return { root, path: target, source, isRepository: false, repositories };
 }

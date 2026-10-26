@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { readConfig } from "./config.js";
-import { ensureDirectory, git, repositoryRoot, requireDirectory } from "./repositories.js";
+import { ensureDirectory, git, repositoryRelativePath, repositoryRoot, requireDirectory } from "./repositories.js";
 
 const exec = promisify(execFile);
 const home = homedir();
@@ -53,6 +53,7 @@ function linkSelectedSecrets(parent: string, group?: string, checkoutName?: stri
 export async function prepareCheckouts(root: string, checkouts: { source: string; path: string }[]): Promise<void> {
   const commands = new Map<string, string>();
   for (const { source, path } of checkouts) {
+    if (!repositoryRelativePath(root, source)) continue;
     const group = relative(root, dirname(source)) || undefined;
     const parent = group === undefined ? path : dirname(path);
     if (group !== undefined) linkSelectedSecrets(parent, group);

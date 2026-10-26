@@ -244,12 +244,17 @@ for (const local of [false, true]) test(`commit and pr validate inputs and invok
   const prefix = local ? [] : ["--yes", "zapdev"];
   const root = join(directory, "repos");
   const repository = join(root, "repo");
-  const group = join(root, "group");
+  const group = join(directory, "group");
   const outside = join(directory, "outside");
+  const worktree = join(directory, "external-worktree");
   const client = new Client({ name: "commit-test", version: "1.0.0" });
   try {
     execFileSync("git", ["init", "--quiet", repository]);
     execFileSync("git", ["init", "--quiet", outside]);
+    execFileSync("git", ["-C", outside, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "-m", "Initial commit"]);
+    execFileSync("git", ["-C", outside, "worktree", "add", "--quiet", "-b", "external", worktree]);
+    mkdirSync(join(outside, "src"));
+    mkdirSync(join(directory, "empty"));
     symlinkSync(outside, join(root, "escape"));
     if (local) {
       mkdirSync(join(clone, "dist"), { recursive: true });
@@ -270,13 +275,30 @@ console.error("scan warning");
     await client.connect(new StdioClientTransport({
       command: process.execPath,
       args: ["--import", "tsx", "index.ts", ...(local ? ["--zapdev-path", clone] : [])],
-      env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, ZD_REPOS_DIR: root },
+      env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, ZD_REPOS_DIR: local ? join(directory, "missing-root") : root },
     }));
 
-    for (const name of ["commit", "pr", "prepare_worktree", "list_services", "start_server", "stop_server", "server_logs"]) {
-      for (const path of [outside, join(root, "escape")]) {
-        const result = await client.callTool({ name, arguments: { path, ...(name === "prepare_worktree" && { branch: "outside" }) } });
+    for (const name of ["prepare_worktree", "list_services", "start_server", "stop_server", "server_logs"]) {
+      const rejected = await client.callTool({ name, arguments: { path: join(root, "escape"), ...(name === "prepare_worktree" && { branch: "outside" }) } });
+      assert.equal(rejected.isError, true, `${name} must reject directory symlinks`);
+      const result = await client.callTool({ name, arguments: { path: outside, ...(name === "prepare_worktree" && { branch: "outside" }) } });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      if (name !== "prepare_worktree") assert.deepEqual(result.structuredContent, { path: realpathSync(outside), services: [] });
+    }
+
+    for (const name of ["commit", "pr"]) {
+      for (const path of [join(root, "escape"), join(directory, "empty"), join(directory, "missing")]) {
+        const result = await client.callTool({ name, arguments: { path } });
         assert.equal(result.isError, true, `${name} must reject ${path}`);
+      }
+      for (const path of [outside, join(outside, "src"), worktree]) {
+        const result = await client.callTool({ name, arguments: { path } });
+        assert.notEqual(result.isError, true, JSON.stringify(result.content));
+        const output = result.structuredContent as { stdout: string };
+        assert.deepEqual(JSON.parse(output.stdout).args, [
+          ...prefix, name, realpathSync(path === worktree ? worktree : outside), "--yes",
+          ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"]),
+        ]);
       }
     }
 

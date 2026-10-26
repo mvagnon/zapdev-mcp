@@ -88,7 +88,7 @@ async function zapdev(path: string, args: [string, ...string[]], branch?: string
 const repositoryPath = z
   .string()
   .refine(isAbsolute, "Expected an absolute repository path.")
-  .describe("Absolute Git repository, worktree or group path inside ZD_REPOS_DIR or ~/.zapdev/worktrees (no ~).");
+  .describe("Absolute existing Git repository, worktree, subdirectory or group path anywhere on the host (no ~).");
 
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
@@ -136,7 +136,7 @@ server.registerTool(
       "Prepare linked worktrees under ~/.zapdev/worktrees/<branch with / replaced by __> from the selected source HEADs. " +
       "A repository path selects only that repository, even inside a group; a group path selects its immediate child repositories. " +
       "Creates the same new branch in every selected repository; never resets sources or overwrites existing branches or paths. " +
-      "Links secrets like prepare_repo, then runs group preparation once or each repository's command when group config is absent. " +
+      "For sources below ZD_REPOS_DIR, links secrets like prepare_repo, then runs group preparation once or each repository's command when group config is absent; external sources skip secrets and preparation commands. " +
       "Work exclusively in the returned paths, not source repositories. Secret links share source files; keep them Git-ignored. " +
       "Failures retain completed worktrees and report their paths; inspect them before retrying.",
     inputSchema: z.object({

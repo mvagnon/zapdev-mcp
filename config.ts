@@ -1,7 +1,8 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join, sep } from "node:path";
 import { z } from "zod";
+import { repositoryRelativePath } from "./repositories.js";
 
 /** Stable service name used by configuration and lifecycle tools. */
 export const serviceNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/);
@@ -21,10 +22,12 @@ const configSchema = z.object({
 /** Optional repository and group lifecycle commands and URLs. */
 export type Config = z.infer<typeof configSchema>;
 
-/** Read configuration matching a checkout or group path; return undefined when absent and reject source symlinks. */
-export function readConfig(root: string, path: string): Config | undefined {
+/** Read managed source configuration; ignore external or ambiguous sources and reject configuration symlinks. */
+export function readConfig(root: string, path: string | undefined): Config | undefined {
+  const identity = path === undefined ? undefined : repositoryRelativePath(root, path);
+  if (identity === undefined) return undefined;
   let directory = homedir();
-  for (const part of [".zapdev", "config", ...relative(root, path).split(sep)]) {
+  for (const part of [".zapdev", "config", ...identity.split(sep)]) {
     directory = join(directory, part);
     const entry = lstatSync(directory, { throwIfNoEntry: false });
     if (!entry) return undefined;

@@ -52,7 +52,7 @@ async function result(action: () => Promise<ServiceOutput>): Promise<CallToolRes
 const selectionSchema = z.object({
   path: z.string().optional().transform(value => value === "" ? undefined : value)
     .refine(value => value === undefined || isAbsolute(value), "Expected an absolute checkout or group path.")
-    .describe("Absolute repository/group path in ZD_REPOS_DIR or ~/.zapdev/worktrees (no ~). Default: server cwd. Worktrees use source configuration. A group uses its config if present; otherwise its immediate child repos."),
+    .describe("Absolute existing repository/group path anywhere on the host (no ~). Default: server cwd. Only sources inside ZD_REPOS_DIR use configuration; external sources have no services. Worktrees use source configuration. A group uses its config if present; otherwise its immediate child repos."),
   service: serviceNameSchema.optional().describe("Service name; omitted selects all."),
 }).strict();
 

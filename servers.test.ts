@@ -475,7 +475,7 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     writeFileSync(parentConfig, "{}");
     for (const name of ["list_services", "start_server", "stop_server", "server_logs"]) {
       for (const input of [{ path: group, repo: "owner/first" }, { path: group, group: "my-group" },
-        { path: group, service: "missing" }, { path: "relative" }, { path: directory }]) {
+        { path: group, service: "missing" }, { path: "relative" }, { path: join(directory, "missing") }]) {
         assert.equal((await client.callTool({ name, arguments: input })).isError, true);
       }
     }

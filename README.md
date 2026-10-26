@@ -30,7 +30,7 @@ flowchart LR
 ```
 
 - `index.ts`: MCP server, input validation, repository management, and CLI calls.
-- `repositories.ts`: shared managed-path validation, repository/group selection, and worktree source resolution for all path-based tools.
+- `repositories.ts`: shared Git repository/group selection and worktree source resolution for all path-based tools.
 - `preparation.ts`: shared secret linking and repository/group preparation.
 - `worktrees.ts`: branch-named worktree creation and isolated preparation.
 - `config.ts`: shared repository and group configuration.
@@ -48,7 +48,7 @@ flowchart LR
 | `ZD_EFFORT`       | For `commit` / `pr` | Reasoning effort supported by your model, such as `low`, `medium`, or `high` |
 | `ZD_API_KEY`      | No                  | Bearer API key; omit for endpoints without authentication                    |
 | `ZD_HOOK_TIMEOUT` | No                  | Deadline per Git hook in seconds; zapdev defaults to `60`                    |
-| `ZD_REPOS_DIR`    | No                  | Absolute checkout root directory; defaults to `~/.zapdev/repos`              |
+| `ZD_REPOS_DIR`    | No                  | Absolute clone root and configuration/secrets scope; defaults to `~/.zapdev/repos` |
 
 `ZD_REPOS_DIR` configures this server.
 The other variables configure zapdev.
@@ -123,14 +123,19 @@ Omitting the flag preserves the default `npx --yes zapdev` behavior.
 
 ### Shared path selection
 
-All path-based tools use the same resolver: `prepare_worktree`, `commit`, `pr`, `list_services`, `start_server`, `stop_server`, and `server_logs`.
-Paths must be inside `ZD_REPOS_DIR` (default `~/.zapdev/repos`) or `~/.zapdev/worktrees`.
-Repositories and linked worktrees must have their main checkout below `ZD_REPOS_DIR`; placing an unrelated checkout under the worktree directory does not grant access.
-Outside paths, directory symlinks below either root, and symlinked Git metadata are rejected before invoking commands.
+All path-based tools accept existing repositories, worktrees, subdirectories, or groups anywhere on the host.
+Supply an absolute path; service tools also default to the server's working directory.
+Directory symlinks supplied as targets and symlinked Git metadata are rejected.
+`ZD_REPOS_DIR` is not an authorization boundary: tools can act on any selected repository accessible to the server's user.
+
+`ZD_REPOS_DIR` defines where `prepare_repo` clones and which source paths use configuration and secrets.
+Sources outside that directory skip configuration, secret linking, and preparation commands.
+Without configured services, service tools return an empty list; requesting a service by name returns an unknown-service error.
+For worktrees, this scope depends on the main checkout, not the worktree's location.
 
 - A repository or subdirectory path selects only its enclosing repository, even inside a group.
 - A group path selects immediate child repositories and worktrees, without recursion; symlinked directories and `node_modules` are excluded.
-- A worktree uses its main checkout's configuration identity; a worktree group must resolve to one source group.
+- A worktree uses its main checkout's configuration identity; workspaces spanning multiple source groups use each child's configuration instead of a shared group configuration.
 - Git commands and preparation reject empty groups; service tools may use a configured group with no repositories.
 
 For services, an existing group configuration takes precedence over child configurations, including an empty configuration.
@@ -206,7 +211,8 @@ Git authentication must work without prompts.
 
 ### `prepare_worktree`
 
-Prepare new branches and linked worktrees from the selected local repositories' current `HEAD`s, then link their secrets and run preparation commands.
+Prepare new branches and linked worktrees from the selected local repositories' current `HEAD`s.
+For sources below `ZD_REPOS_DIR`, also link their secrets and run preparation commands.
 A repository or subdirectory path selects only its enclosing repository, even inside a group.
 Outside a repository, a group path selects its immediate child repositories and worktrees using the shared path selection above.
 An empty selection is rejected.
@@ -234,8 +240,8 @@ Returns every created repository path and an explicit instruction to work there,
 
 | Source | New repository path |
 | ------ | ------------------- |
-| Standalone repository | `~/.zapdev/worktrees/<workspace>` |
-| Group or single grouped checkout | `~/.zapdev/worktrees/<workspace>/owner__repo`, for each selected repository |
+| Single checkout directly below `ZD_REPOS_DIR` | `~/.zapdev/worktrees/<workspace>` |
+| Group, grouped checkout, or external checkout | `~/.zapdev/worktrees/<workspace>/<checkout-name>`, for each selected repository |
 
 The workspace name replaces every `/` in the branch name with `__`: branch `feat/search` uses directory `feat__search`.
 Branch names are unchanged, and existing worktrees are not moved.
@@ -245,11 +251,11 @@ All selected repositories' branches, HEADs, and destination-name collisions are 
 Creation uses `git worktree add -b <branch> <path> <source-HEAD>` without force, with the same branch name in each repository.
 
 Secret and configuration selection follows the main checkout's layout under `ZD_REPOS_DIR`, even when the source is another linked worktree.
-External source repositories are rejected, including linked worktrees whose main checkout is outside `ZD_REPOS_DIR`.
+External source repositories and their linked worktrees are accepted without applying configuration or linking secrets.
 Secrets remain symlinks to shared source files, not independent copies; keep them Git-ignored.
 
 Secret linking is shared with `prepare_repo`, including group-root files and recursive repository secrets.
-All selected worktrees are created and receive their secrets before any preparation command runs.
+All selected worktrees are created and eligible secrets are linked before any preparation command runs.
 Grouped sources get an isolated workspace root containing group-root secrets and all selected repositories.
 Group configuration takes precedence, and its `prepareCommand` runs once in that workspace root.
 When the group configuration is absent, each repository's command runs inside its own worktree.
@@ -356,7 +362,7 @@ Prepare checkouts with `prepare_repo` or worktrees with `prepare_worktree` first
 
 | Argument  | Required | Description                                                                                                                       |
 | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `path`    | No       | Absolute repository, worktree, subdirectory, or group path under either managed root; defaults to the server's working directory |
+| `path`    | No       | Absolute repository, worktree, subdirectory, or group path anywhere on the host; defaults to the server's working directory |
 | `service` | No       | Configured service name; otherwise selects all services                                                                           |
 
 With `ZD_REPOS_DIR=/srv/repos`:
@@ -370,8 +376,8 @@ Selecting `ZD_REPOS_DIR` itself uses its configuration if present, otherwise its
 Nested groups are not traversed.
 
 **The default cwd belongs to the server process, not your MCP client's active folder.**
-Paths must remain inside `ZD_REPOS_DIR` or `~/.zapdev/worktrees`, following the shared path selection above.
-Outside paths and symlinked directories are rejected.
+Paths outside `ZD_REPOS_DIR` are accepted but have no configured services unless they are worktrees of a source inside `ZD_REPOS_DIR`.
+Directory symlinks supplied as targets are rejected.
 When using `npm run inspect` from this source repository, supply `path` explicitly.
 Omitted and empty `path` values both use the server cwd.
 Service tools accept `path`, not `repo` or `group`.

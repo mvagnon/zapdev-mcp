@@ -61,9 +61,27 @@ test("prepare_worktree selects one repository or all group children and prepares
     mkdirSync(workspaceRoot, { recursive: true });
     const foreign = join(workspaceRoot, "foreign");
     git(outside, "worktree", "add", "--quiet", "-b", "foreign", foreign);
-    for (const name of ["commit", "pr", "prepare_worktree", "list_services", "start_server", "stop_server", "server_logs"]) {
-      const result = await client.callTool({ name, arguments: { path: foreign, ...(name === "prepare_worktree" && { branch: "foreign-child" }) } });
-      assert.equal(result.isError, true, `${name} must reject worktrees linked to an unmanaged repository`);
+    const escapedConfig = join(directory, ".zapdev", "outside");
+    mkdirSync(escapedConfig);
+    writeFileSync(join(escapedConfig, ".env"), "EXTERNAL=must-not-link");
+    writeFileSync(join(escapedConfig, "zapdev.json"), JSON.stringify({
+      prepareCommand: "printf unexpected > prepared",
+      services: { external: { startCommand: "must-not-run" } },
+    }));
+    for (const source of [outside, foreign]) {
+      for (const name of ["list_services", "start_server", "stop_server", "server_logs"]) {
+        const result = await client.callTool({ name, arguments: { path: source } });
+        assert.notEqual(result.isError, true, JSON.stringify(result.content));
+        assert.deepEqual(result.structuredContent, { path: source, services: [] });
+      }
+      const result = await client.callTool({ name: "prepare_worktree", arguments: { path: source, branch: source === outside ? "outside-child" : "foreign-child" } });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      const paths = result.structuredContent?.paths as string[];
+      assert.equal(paths.length, 1);
+      assert.equal(git(paths[0]!, "rev-parse", "HEAD"), git(outside, "rev-parse", "HEAD"));
+      assert.equal(existsSync(join(paths[0]!, ".env")), false);
+      assert.equal(existsSync(join(paths[0]!, "prepared")), false);
+      assert.equal(readFileSync(join(outside, "tracked.txt"), "utf8"), "source edits must survive");
     }
     const created = await client.callTool({ name: "prepare_worktree", arguments: { path: standalone, branch } });
     assert.notEqual(created.isError, true, JSON.stringify(created.content));
