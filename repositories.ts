@@ -54,7 +54,7 @@ export function ensureDirectory(path: string): void {
 }
 
 /** Require an existing directory, rejecting files and symbolic links. */
-export function requireDirectory(path: string): void {
+function requireDirectory(path: string): void {
   if (!lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`Expected an existing directory, not a symlink: ${path}`);
   }

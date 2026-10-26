@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -92,8 +92,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
           assert.equal(readlinkSync(join(expected, ".env.local")), join(secrets, "owner__repo", ".env.local"));
         }
         if (group === "my-group") {
-          assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), '{"group":true}');
-          assert.equal(readlinkSync(join(root, group, "config.json")), join(groupSecrets, "config.json"));
+          assert.equal(readFileSync(join(root, group, "config.json"), "utf8"), "old copied secret");
           assert.equal(existsSync(join(expected, "config.json")), false);
           assert.equal(readFileSync(join(expected, ".env"), "utf8"), "GROUP=private");
           assert.equal(readFileSync(join(expected, "nested", "key.pem"), "utf8"), "nested private key");
@@ -122,7 +121,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       prepareCommand: "test -L 'owner__repo/.env' && test -f 'owner__repo/AGENTS.md' && printf parent > prepared",
     }));
     writeFileSync(childConfig, JSON.stringify({
-      prepareCommand: "test -L .env && test -L ../config.json && printf child > prepared",
+      prepareCommand: "test -L .env && printf child > prepared",
     }));
     for (const group of [undefined, "my-group"]) {
       const parent = join(root, ...(group ? [group] : []));
@@ -133,23 +132,23 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
         });
         assert.notEqual(result.isError, true, JSON.stringify(result.content));
         assert.deepEqual(result.structuredContent, { path });
-        assert.equal(readFileSync(join(group ? parent : path, "prepared"), "utf8"), group ? "parent" : "standalone");
-        if (group) assert.equal(existsSync(join(path, "prepared")), false);
+        assert.equal(readFileSync(join(path, "prepared"), "utf8"), group ? "child" : "standalone");
+        if (group) assert.equal(existsSync(join(parent, "prepared")), false);
       }
     }
 
     const groupPath = join(root, "my-group");
-    writeFileSync(childConfig, "invalid JSON");
+    writeFileSync(parentConfig, "invalid JSON");
     for (const config of [{}, { services: {} }, { frontUrl: "http://localhost:3000" }]) {
-      writeFileSync(parentConfig, JSON.stringify(config));
+      writeFileSync(childConfig, JSON.stringify(config));
       const response = await client.callTool({
         name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
       });
       assert.notEqual(response.isError, true, JSON.stringify(response.content));
       assert.equal(existsSync(join(groupPath, "owner__repo", "prepared")), false);
     }
-    writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf child > prepared" }));
-    writeFileSync(parentConfig, JSON.stringify({ prepareCommand: "printf 'group prepare failed' >&2; exit 1" }));
+    rmSync(childConfig);
+    writeFileSync(parentConfig, JSON.stringify({ prepareCommand: "printf parent > prepared; printf 'group prepare failed' >&2; exit 1" }));
     const failedGroup = await client.callTool({
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
@@ -161,6 +160,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     })).isError, true);
     rmSync(parentConfig);
+    writeFileSync(childConfig, JSON.stringify({ prepareCommand: "printf child > prepared" }));
     const fallback = await client.callTool({
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
@@ -201,12 +201,21 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     writeFileSync(outside, "untouched");
     rmSync(groupConfig);
     symlinkSync(outside, groupConfig);
+    const savedSecrets = join(directory, "saved-secrets");
+    renameSync(repoSecrets, savedSecrets);
     const unsafeDestination = await client.callTool({
       name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
     });
     assert.equal(unsafeDestination.isError, true);
     assert.equal(readFileSync(outside, "utf8"), "untouched");
     rmSync(groupConfig);
+    const parentSecrets = await client.callTool({
+      name: "prepare_repo", arguments: { repo: "owner/repo", group: "my-group" },
+    });
+    assert.notEqual(parentSecrets.isError, true, JSON.stringify(parentSecrets.content));
+    assert.equal(readlinkSync(groupConfig), join(groupSecrets, "config.json"));
+    assert.equal(existsSync(join(groupPath, "owner__repo", ".env")), false);
+    renameSync(savedSecrets, repoSecrets);
 
     mkdirSync(join(repoSecrets, ".git"));
     writeFileSync(join(repoSecrets, ".git", "config"), "invalid git config");

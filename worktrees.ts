@@ -1,7 +1,8 @@
 import { lstatSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { prepareCheckouts } from "./preparation.js";
+import { resolveConfigs } from "./config.js";
+import { prepareCheckouts, resolveSecrets } from "./preparation.js";
 import { ensureDirectory, git, selectRepositories, worktreeRoot } from "./repositories.js";
 
 /** Prepare branch-named worktrees for one repository or a group's immediate children without resetting sources. */
@@ -11,14 +12,17 @@ export async function prepareWorktree({ path, branch }: { path: string; branch: 
   const paths: string[] = [];
   const workspace = join(worktreeRoot(), branch.replaceAll("/", "__"));
   try {
-    const { root, repositories, isRepository } = await selectRepositories(path);
+    const selection = await selectRepositories(path);
+    const { root, repositories, isRepository } = selection;
     if (repositories.length === 0) throw new Error(`No Git repository found in ${path} or its immediate children.`);
     if (await git(path, "check-ref-format", "--branch", branch) !== branch) throw new Error("Expected a literal new branch name.");
     const checkouts: { repository: string; source: string; path: string; head: string }[] = [];
     for (const { path: repository, source } of repositories) {
       if (await git(repository, "branch", "--list", "--", branch)) throw new Error(`Branch already exists in ${repository}: ${branch}`);
       const head = await git(repository, "rev-parse", "--verify", "HEAD^{commit}");
-      const destination = !isRepository || dirname(source) !== root ? join(workspace, basename(source)) : workspace;
+      const usesParent = isRepository && dirname(source) === root &&
+        [...resolveConfigs(selection), ...resolveSecrets(selection)].some(target => target.path !== selection.path);
+      const destination = !isRepository || dirname(source) !== root || usesParent ? join(workspace, basename(source)) : workspace;
       checkouts.push({ repository, source, path: destination, head });
     }
     if (new Set(checkouts.map(({ path }) => path)).size !== checkouts.length) throw new Error("Selected repositories have conflicting worktree paths.");
@@ -33,7 +37,7 @@ export async function prepareWorktree({ path, branch }: { path: string; branch: 
       await git(checkout.repository, "worktree", "add", "-b", branch, "--", checkout.path, checkout.head);
       paths.push(checkout.path);
     }
-    await prepareCheckouts(root, checkouts);
+    await prepareCheckouts({ ...selection, path: isRepository ? checkouts[0]!.path : workspace, repositories: checkouts });
     return { paths };
   } catch (error) {
     return {

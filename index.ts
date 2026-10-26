@@ -98,7 +98,7 @@ server.registerTool(
     description:
       "Clone/reset a disposable GitHub checkout under ZD_REPOS_DIR (default ~/.zapdev/repos). Requires repo; group is optional. " +
       "Call only when the user explicitly requests preparing or resetting this checkout; never call automatically as a prerequisite for another task. " +
-      "Links repository secrets and, when grouped, group-root secrets; uses the group's config if present, otherwise the checkout's, for prepareCommand. " +
+      "Resolves configuration and secrets independently: uses the repository's resources if present, otherwise its direct parent's, without merging. " +
       "Destructive: discards tracked edits and untracked non-ignored files. Editing secret symlinks changes source secrets; keep links Git-ignored.",
     inputSchema: repositorySelectionSchema
       .extend({
@@ -136,7 +136,7 @@ server.registerTool(
       "Prepare linked worktrees under ~/.zapdev/worktrees/<branch with / replaced by __> from the selected source HEADs. " +
       "A repository path selects only that repository, even inside a group; a group path selects its immediate child repositories. " +
       "Creates the same new branch in every selected repository; never resets sources or overwrites existing branches or paths. " +
-      "For sources below ZD_REPOS_DIR, links secrets like prepare_repo, then runs group preparation once or each repository's command when group config is absent; external sources skip secrets and preparation commands. " +
+      "For sources below ZD_REPOS_DIR, resolves configuration and secrets independently: repo then direct parent, or group then immediate child repos, without merging or further fallback. External sources skip secrets and preparation commands. " +
       "Returns the created worktree paths. Secret links share source files; keep them Git-ignored. " +
       "Failures retain completed worktrees and report their paths; inspect them before retrying.",
     inputSchema: z.object({

@@ -43,8 +43,9 @@ test("prepare_worktree selects one repository or all group children and prepares
     mkdirSync(join(secrets, "my-group", "other__repo"));
     writeFileSync(join(secrets, "my-group", "other__repo", ".env"), "OTHER=private");
     const groupConfig = join(config, "my-group", "zapdev.json");
+    const childConfig = join(config, "my-group", "owner__repo", "zapdev.json");
     writeFileSync(groupConfig, JSON.stringify({
-      prepareCommand: "test -L shared.json && test -L owner__repo/.env && printf group > prepared",
+      prepareCommand: "test -f owner__repo/tracked.txt && printf group > prepared",
     }));
     await client.connect(new StdioClientTransport({
       command: process.execPath,
@@ -101,25 +102,30 @@ test("prepare_worktree selects one repository or all group children and prepares
     const groupResult = await client.callTool({ name: "prepare_worktree", arguments: { path: grouped, branch: "grouped" } });
     assert.notEqual(groupResult.isError, true, JSON.stringify(groupResult.content));
     assert.deepEqual(groupResult.structuredContent, { paths: [groupedPath] });
-    assert.equal(readFileSync(join(groupedWorkspace, "prepared"), "utf8"), "group");
-    assert.equal(readlinkSync(join(groupedWorkspace, "shared.json")), join(secrets, "my-group", "shared.json"));
+    assert.equal(readFileSync(join(groupedPath, "prepared"), "utf8"), "repository");
+    assert.equal(existsSync(join(groupedWorkspace, "shared.json")), false);
     assert.equal(readlinkSync(join(groupedPath, ".env")), join(secrets, "my-group", "owner__repo", ".env"));
     assert.equal(existsSync(join(root, "my-group", "prepared")), false);
-    assert.equal(existsSync(join(groupedPath, "prepared")), false);
+    assert.equal(existsSync(join(groupedWorkspace, "prepared")), false);
     assert.equal(existsSync(join(groupedWorkspace, "other__repo")), false);
 
-    writeFileSync(groupConfig, "{}");
+    writeFileSync(childConfig, "{}");
     const noCommand = await client.callTool({ name: "prepare_worktree", arguments: { path: groupedPath, branch: "no-command" } });
     assert.notEqual(noCommand.isError, true, JSON.stringify(noCommand.content));
     assert.equal(existsSync(join(workspaceRoot, "no-command", "owner__repo", "prepared")), false);
-    rmSync(groupConfig);
+    rmSync(childConfig);
+    rmSync(join(secrets, "my-group", "owner__repo", ".env"));
     const fallback = await client.callTool({ name: "prepare_worktree", arguments: { path: grouped, branch: "fallback" } });
     assert.notEqual(fallback.isError, true, JSON.stringify(fallback.content));
-    assert.equal(readFileSync(join(workspaceRoot, "fallback", "owner__repo", "prepared"), "utf8"), "repository");
+    assert.equal(readFileSync(join(workspaceRoot, "fallback", "prepared"), "utf8"), "group");
+    assert.equal(readlinkSync(join(workspaceRoot, "fallback", "shared.json")), join(secrets, "my-group", "shared.json"));
+    assert.equal(existsSync(join(workspaceRoot, "fallback", "owner__repo", ".env")), false);
+    writeFileSync(join(secrets, "my-group", "owner__repo", ".env"), "PRIVATE=value");
+    writeFileSync(childConfig, JSON.stringify({ prepareCommand: "test -L .env && printf repository > prepared" }));
 
     const group = join(root, "my-group");
     writeFileSync(groupConfig, JSON.stringify({
-      prepareCommand: "test -L shared.json && test -L owner__repo/.env && test -L other__repo/.env && test -f other__repo/tracked.txt && printf group >> prepared",
+      prepareCommand: "test -L shared.json && test ! -e owner__repo/.env && test ! -e other__repo/.env && test -f other__repo/tracked.txt && printf group >> prepared",
     }));
     mkdirSync(join(group, "not-a-repo"));
     symlinkSync(standalone, join(group, "linked-repo"));
@@ -134,6 +140,16 @@ test("prepare_worktree selects one repository or all group children and prepares
     }
     assert.equal(readFileSync(join(other, "tracked.txt"), "utf8"), "source edits must survive");
     assert.equal(existsSync(join(group, "prepared")), false);
+
+    rmSync(groupConfig);
+    rmSync(join(secrets, "my-group", "shared.json"));
+    const children = await client.callTool({ name: "prepare_worktree", arguments: { path: group, branch: "children" } });
+    assert.notEqual(children.isError, true, JSON.stringify(children.content));
+    assert.equal(readFileSync(join(workspaceRoot, "children", "owner__repo", "prepared"), "utf8"), "repository");
+    for (const name of ["owner__repo", "other__repo"]) {
+      assert.equal(readlinkSync(join(workspaceRoot, "children", name, ".env")), join(secrets, "my-group", name, ".env"));
+    }
+    assert.equal(existsSync(join(workspaceRoot, "children", "prepared")), false);
 
     git(grouped, "branch", "group-conflict");
     const conflict = await client.callTool({ name: "prepare_worktree", arguments: { path: group, branch: "group-conflict" } });
@@ -187,6 +203,25 @@ test("prepare_worktree selects one repository or all group children and prepares
     assert.equal(existsSync(path), false);
     assert.equal(git(standalone, "branch", "--list", "--", branch), branch);
     assert.equal(readFileSync(join(secrets, "owner__repo", ".env"), "utf8"), "PRIVATE=value");
+
+    rmSync(join(config, "owner__repo", "zapdev.json"));
+    rmSync(join(secrets, "owner__repo", ".env"));
+    writeFileSync(join(config, "zapdev.json"), JSON.stringify({
+      prepareCommand: "test -L shared.json && test -f owner__repo/tracked.txt && printf parent > prepared",
+      services: { parent: { startCommand: "must-not-run" } },
+    }));
+    writeFileSync(join(secrets, "shared.json"), "root secret");
+    const inheritedWorkspace = join(workspaceRoot, "root-fallback");
+    const inherited = await client.callTool({ name: "prepare_worktree", arguments: { path: standalone, branch: "root-fallback" } });
+    assert.notEqual(inherited.isError, true, JSON.stringify(inherited.content));
+    assert.deepEqual(inherited.structuredContent?.paths, [join(inheritedWorkspace, "owner__repo")]);
+    assert.equal(readFileSync(join(inheritedWorkspace, "prepared"), "utf8"), "parent");
+    assert.equal(readlinkSync(join(inheritedWorkspace, "shared.json")), join(secrets, "shared.json"));
+    assert.equal(existsSync(join(workspaceRoot, "shared.json")), false);
+    const inheritedService = await client.callTool({ name: "list_services", arguments: { path: join(inheritedWorkspace, "owner__repo") } });
+    assert.deepEqual(inheritedService.structuredContent, {
+      path: join(inheritedWorkspace, "owner__repo"), services: [{ name: "parent", path: inheritedWorkspace }],
+    });
   } finally {
     await client.close();
     rmSync(directory, { recursive: true, force: true });

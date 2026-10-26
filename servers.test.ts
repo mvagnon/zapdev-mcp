@@ -240,6 +240,16 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     assert.equal((await client.callTool({
       name: "start_server", arguments: { path: first, service: "frontend" },
     })).isError, true);
+    const firstConfig = join(config, "owner__first", "zapdev.json");
+    const ownConfig = readFileSync(firstConfig, "utf8");
+    rmSync(firstConfig);
+    for (const name of ["list_services", "start_server", "server_logs"]) {
+      const fallback = await client.callTool({ name, arguments: { path: first } });
+      assert.equal(fallback.isError, name === "start_server" ? true : undefined, JSON.stringify(fallback.content));
+      assert.deepEqual((fallback.structuredContent?.services as Service[]).map(({ name, path }) => ({ name, path })),
+        [{ name: "frontend", path: group }]);
+    }
+    writeFileSync(firstConfig, ownConfig);
     for (const expected of [first, standalone]) {
       const input = { path: expected };
       const started = await client.callTool({ name: "start_server", arguments: input });
@@ -259,6 +269,13 @@ process.stdout.write(entries.slice(-limit).map(line => prefix + line).join("\\n"
     const workspaceFirst = join(workspace, "owner__first");
     const workspaceSecond = join(workspace, "owner__second");
     assert.deepEqual(prepared.structuredContent?.paths, [workspaceFirst, workspaceSecond]);
+    rmSync(firstConfig);
+    const parentWorktree = await client.callTool({ name: "list_services", arguments: { path: workspaceFirst } });
+    assert.deepEqual(parentWorktree.structuredContent, { path: workspaceFirst, services: [{ name: "frontend", path: workspace }] });
+    writeFileSync(firstConfig, "{}");
+    const emptyWorktree = await client.callTool({ name: "list_services", arguments: { path: workspaceFirst } });
+    assert.deepEqual(emptyWorktree.structuredContent, { path: workspaceFirst, services: [] });
+    writeFileSync(firstConfig, ownConfig);
     for (const [path, name] of [[workspace, "frontend"], [workspaceFirst, "backend"]]) {
       const listed = await client.callTool({ name: "list_services", arguments: { path } });
       assert.notEqual(listed.isError, true, JSON.stringify(listed.content));

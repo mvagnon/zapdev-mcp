@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { readConfig, serviceNameSchema } from "./config.js";
+import { resolveConfigs, serviceNameSchema } from "./config.js";
 import { selectRepositories } from "./repositories.js";
 import { runService, type Service, type ServiceResult } from "./service-manager.js";
 
@@ -11,15 +11,12 @@ type ServiceSummary = Pick<ServiceResult, "name" | "path" | "state" | "error" | 
 type ServiceOutput = { path: string; services: ServiceSummary[] };
 
 async function selected(input: Selection): Promise<{ path: string; services: Service[] }> {
-  const { root, path, source, isRepository, repositories } = await selectRepositories(input.path);
-  const config = readConfig(root, source);
-  const targets = isRepository || config !== undefined ? [{ path, source }] : repositories;
-  const services = targets.flatMap(target =>
-    Object.entries((target.path === path ? config : readConfig(root, target.source))?.services ?? {})
-      .map(([name, config]) => ({ name, path: target.path, ...config })));
+  const selection = await selectRepositories(input.path);
+  const services = resolveConfigs(selection).flatMap(({ path, value }) =>
+    Object.entries(value.services ?? {}).map(([name, config]) => ({ name, path, ...config })));
   const filtered = input.service === undefined ? services : services.filter(({ name }) => name === input.service);
   if (input.service !== undefined && filtered.length === 0) throw new Error(`Unknown service: ${input.service}`);
-  return { path, services: filtered };
+  return { path: selection.path, services: filtered };
 }
 
 async function manage(input: Selection, action: "start" | "stop"): Promise<ServiceOutput> {
@@ -52,7 +49,7 @@ async function result(action: () => Promise<ServiceOutput>): Promise<CallToolRes
 const selectionSchema = z.object({
   path: z.string().optional().transform(value => value === "" ? undefined : value)
     .refine(value => value === undefined || isAbsolute(value), "Expected an absolute checkout or group path.")
-    .describe("Absolute existing repository/group path anywhere on the host (no ~). Default: server cwd. Only sources inside ZD_REPOS_DIR use configuration; external sources have no services. Worktrees use source configuration. A group uses its config if present; otherwise its immediate child repos."),
+    .describe("Absolute existing repository/group path anywhere on the host (no ~). Default: server cwd. Only sources inside ZD_REPOS_DIR use configuration; external sources have no services. Worktrees use source configuration. A repo uses its config, otherwise its direct parent's; a group uses its config, otherwise each immediate child repo's. No merging or further fallback."),
   service: serviceNameSchema.optional().describe("Service name; omitted selects all."),
 }).strict();
 

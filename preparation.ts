@@ -1,71 +1,60 @@
 import { execFile } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { promisify } from "node:util";
-import { readConfig } from "./config.js";
-import { ensureDirectory, git, repositoryRelativePath, repositoryRoot, requireDirectory } from "./repositories.js";
+import { resolveConfigs, resolveResources } from "./config.js";
+import { ensureDirectory, git, repositoryRoot, selectRepositories, type RepositorySelection } from "./repositories.js";
 
 const exec = promisify(execFile);
 const home = homedir();
+type Secret = { source: string; name: string };
 
-function linkSecrets(source: string, destination: string, recursive: boolean): void {
-  const directory = lstatSync(source, { throwIfNoEntry: false });
-  if (!directory) return;
-  if (!directory.isDirectory()) {
-    throw new Error(`Refusing to read secrets from a non-directory or symlink: ${source}`);
-  }
-  ensureDirectory(destination);
+function readSecrets(source: string, recursive: boolean): Secret[] | undefined {
+  const files: Secret[] = [];
   for (const entry of readdirSync(source, { withFileTypes: true })) {
     const from = join(source, entry.name);
-    const to = join(destination, entry.name);
     if (entry.name.toLowerCase() === ".git") {
       throw new Error(`Refusing to link Git metadata from secrets: ${from}`);
     }
     if (entry.isDirectory()) {
-      if (recursive) linkSecrets(from, to, true);
+      if (recursive) files.push(...(readSecrets(from, true) ?? []).map(file => ({ ...file, name: join(entry.name, file.name) })));
     } else {
       if (!entry.isFile()) {
         throw new Error(`Refusing to link a non-file or symlink from secrets: ${from}`);
       }
-      const target = lstatSync(to, { throwIfNoEntry: false });
-      if (target?.isSymbolicLink() && readlinkSync(to) === from) continue;
-      if (target && !target.isFile()) {
-        throw new Error(`Refusing to overwrite a non-file or symlink: ${to}`);
-      }
-      if (target) rmSync(to);
-      symlinkSync(from, to);
+      files.push({ source: from, name: entry.name });
     }
   }
+  return files.length === 0 ? undefined : files;
 }
 
-function linkSelectedSecrets(parent: string, group?: string, checkoutName?: string): void {
-  const secrets = join(home, ".zapdev", "secrets");
-  const source = group === undefined ? secrets : join(secrets, group);
-  for (const directory of new Set([secrets, source])) {
-    if (!lstatSync(directory, { throwIfNoEntry: false })) return;
-    requireDirectory(directory);
-  }
-  linkSecrets(checkoutName === undefined ? source : join(source, checkoutName), parent, checkoutName !== undefined);
+/** Resolve secret files with exclusive repository/parent or group/children fallback. */
+export function resolveSecrets(selection: RepositorySelection): { path: string; value: Secret[] }[] {
+  return resolveResources(selection, "secrets", readSecrets);
 }
 
-/** Link all checkout secrets before running each selected repository or group preparation command once. */
-export async function prepareCheckouts(root: string, checkouts: { source: string; path: string }[]): Promise<void> {
-  const commands = new Map<string, string>();
-  for (const { source, path } of checkouts) {
-    if (!repositoryRelativePath(root, source)) continue;
-    const group = relative(root, dirname(source)) || undefined;
-    const parent = group === undefined ? path : dirname(path);
-    if (group !== undefined) linkSelectedSecrets(parent, group);
-    linkSelectedSecrets(path, group, basename(source));
-    const config = readConfig(root, group === undefined ? source : dirname(source));
-    const command = (config ?? readConfig(root, source))?.prepareCommand;
-    if (command === undefined) continue;
-    const cwd = config === undefined ? path : parent;
-    if (commands.has(cwd) && commands.get(cwd) !== command) throw new Error(`Conflicting preparation commands for ${cwd}`);
-    commands.set(cwd, command);
+/** Resolve secrets and configuration independently, link selected secrets, then run preparation commands. */
+export async function prepareCheckouts(selection: RepositorySelection): Promise<void> {
+  for (const { path, value } of resolveSecrets(selection)) {
+    for (const { source, name } of value) {
+      const destination = join(path, name);
+      let parent = path;
+      ensureDirectory(parent);
+      for (const part of dirname(name).split(sep)) {
+        parent = join(parent, part);
+        ensureDirectory(parent);
+      }
+      const target = lstatSync(destination, { throwIfNoEntry: false });
+      if (target?.isSymbolicLink() && readlinkSync(destination) === source) continue;
+      if (target && !target.isFile()) throw new Error(`Refusing to overwrite a non-file or symlink: ${destination}`);
+      if (target) rmSync(destination);
+      symlinkSync(source, destination);
+    }
   }
-  for (const [cwd, command] of commands) await exec("/bin/sh", ["-c", command], { cwd, timeout: 180_000 });
+  for (const { path: cwd, value } of resolveConfigs(selection)) {
+    if (value.prepareCommand !== undefined) await exec("/bin/sh", ["-c", value.prepareCommand], { cwd, timeout: 180_000 });
+  }
 }
 
 async function prepareRepository(root: string, repo: string, group?: string, branch?: string): Promise<{ path: string }> {
@@ -107,14 +96,14 @@ async function prepareRepository(root: string, repo: string, group?: string, bra
     await git(path, "rev-parse", "--verify", `${reference}^{commit}`);
     await git(path, "checkout", "--quiet", "--force", "-B", branch, reference);
     await git(path, "clean", "--quiet", "-fd");
-    await prepareCheckouts(root, [{ source: path, path }]);
+    await prepareCheckouts(await selectRepositories(path));
     return { path };
   } finally {
     rmdirSync(lock);
   }
 }
 
-/** Prepare one isolated checkout, linking group and repository secrets when grouped. */
+/** Prepare one isolated checkout using the shared repository/parent resource fallback. */
 export async function prepareSelection(
   { repo, group, branch }: { repo: string; group?: string; branch?: string },
 ): Promise<{ path: string }> {

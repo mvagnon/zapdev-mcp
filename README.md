@@ -138,7 +138,9 @@ For worktrees, this scope depends on the main checkout, not the worktree's locat
 - A worktree uses its main checkout's configuration identity; workspaces spanning multiple source groups use each child's configuration instead of a shared group configuration.
 - Git commands and preparation reject empty groups; service tools may use a configured group with no repositories.
 
-For services, an existing group configuration takes precedence over child configurations, including an empty configuration.
+Configuration and secrets use the same exclusive scope resolution for preparation and services.
+A repository uses its own resources, falling back to its direct parent's; a group uses its own resources, falling back to each immediate child repository's.
+Configuration and secrets resolve independently, without merging or a second fallback.
 Worktree services run in the selected worktree or workspace directory and have distinct units from the source checkout.
 These path checks are not an OS sandbox: trusted preparation commands, services, and Git hooks still run with host permissions.
 
@@ -170,9 +172,10 @@ Returns the absolute checkout `path`.
 Only the selected checkout is prepared.
 
 After Git preparation and secret linking, runs the optional `prepareCommand` from `zapdev.json`.
-With `group`, an existing group configuration takes precedence over the checkout configuration; its command runs in the group directory.
-Only when the group configuration file is absent does the checkout's command run, in the checkout directory.
-Grouped checkouts link both group-root and selected repository secrets before running the selected command.
+The checkout configuration takes precedence, including an empty configuration.
+Only when its configuration file is absent does it use the direct parent's configuration.
+Commands run in the selected configuration's checkout or parent directory.
+Secrets resolve independently using the same checkout-then-parent order, without combining both scopes.
 Each command has a 180-second timeout.
 Preparation stops at the first failure.
 Completed Git changes and secret links are not rolled back.
@@ -187,12 +190,14 @@ After each clone or refresh, matching secrets are symlinked from `~/.zapdev/secr
 | `my-group/owner__repo/.env`        | `my-group/owner__repo/.env`                |
 | `owner__repo/.env.local`           | `owner__repo/.env.local` (without `group`) |
 
-With `repo + group`, both group-root files and repository secrets are linked before the selected prepare command.
+With `repo + group`, repository secrets are linked recursively when present; otherwise, group-root files are linked in the group directory.
 Group-root secrets stay in the group directory, never in child checkouts.
 Only the selected checkout's secrets are linked recursively.
 Other repos' secrets are untouched.
 Grouped checkouts do not inherit secrets from outside their group.
 Missing secrets folders are ignored.
+Empty folders contain no secrets and allow fallback; group subdirectories alone do not count as group-root secrets.
+Existing links from a previous preparation are not removed when the selected scope changes.
 Existing regular files are replaced with absolute symlinks.
 Matching symlinks are reused.
 Source symlinks, unrelated destination symlinks, and Git metadata are rejected.
@@ -239,7 +244,8 @@ Returns every created repository path:
 
 | Source | New repository path |
 | ------ | ------------------- |
-| Single checkout directly below `ZD_REPOS_DIR` | `~/.zapdev/worktrees/<workspace>` |
+| Single checkout directly below `ZD_REPOS_DIR`, without parent resource fallback | `~/.zapdev/worktrees/<workspace>` |
+| Single checkout using parent configuration or secrets | `~/.zapdev/worktrees/<workspace>/<checkout-name>` |
 | Group, grouped checkout, or external checkout | `~/.zapdev/worktrees/<workspace>/<checkout-name>`, for each selected repository |
 
 The workspace name replaces every `/` in the branch name with `__`: branch `feat/search` uses directory `feat__search`.
@@ -253,11 +259,13 @@ Secret and configuration selection follows the main checkout's layout under `ZD_
 External source repositories and their linked worktrees are accepted without applying configuration or linking secrets.
 Secrets remain symlinks to shared source files, not independent copies; keep them Git-ignored.
 
-Secret linking is shared with `prepare_repo`, including group-root files and recursive repository secrets.
+Secret linking and configuration resolution are shared with `prepare_repo`.
 All selected worktrees are created and eligible secrets are linked before any preparation command runs.
-Grouped sources get an isolated workspace root containing group-root secrets and all selected repositories.
-Group configuration takes precedence, and its `prepareCommand` runs once in that workspace root.
-When the group configuration is absent, each repository's command runs inside its own worktree.
+Group selections use the group's configuration and root-level secrets when present, independently falling back to immediate child repositories when absent.
+Repository selections use their own configuration and recursive secrets when present, independently falling back to the direct parent when absent.
+Group commands run once in the isolated workspace root; repository commands run in their own worktrees.
+Single root checkouts that inherit parent resources also get a nested checkout so parent resources remain isolated in the workspace.
+Existing flat worktrees reject parent fallback into the shared worktrees root; prepare a new worktree from the main checkout instead.
 Selecting one grouped repository still prepares only that repository, so a group command requiring siblings may fail.
 Commands retain the 180-second timeout and run with the MCP server's host permissions.
 
@@ -275,6 +283,7 @@ They are not copied or symlinked into checkouts.
 
 | Configuration path                                 | Applies to                |
 | -------------------------------------------------- | ------------------------- |
+| `~/.zapdev/config/zapdev.json`                      | Checkout root as a group   |
 | `~/.zapdev/config/owner__repo/zapdev.json`          | Standalone repository     |
 | `~/.zapdev/config/my-group/zapdev.json`            | Group (parent)            |
 | `~/.zapdev/config/my-group/owner__repo/zapdev.json` | Repository inside a group |
@@ -299,7 +308,8 @@ Copy this template to the applicable location and adapt the commands and URLs:
 
 All fields are optional.
 An existing configuration file takes precedence even when it contains `{}` or lacks the relevant command or services.
-Only a missing group configuration file enables fallback to checkout configurations; configurations are not merged.
+Only a missing configuration file enables fallback: repository to direct parent, or group to immediate child repositories.
+Fallback reads those configurations directly, without further fallback or merging.
 Omitted commands do not run.
 URLs are metadata and are not returned by service tools.
 They must be absolute URLs, including database schemes.
@@ -332,16 +342,16 @@ Cleanup must tolerate partial startup and repeated execution.
 Commands and services are scoped to the selection:
 
 - Service tools default to the MCP server's working directory.
-- A checkout path selects only that repo.
+- A checkout path uses its own configuration, falling back to its direct parent's only when absent.
 - A group path selects only the group's services when its configuration file exists.
 - Without a group configuration file, a group path selects its immediate child checkouts' services.
 - A group configuration with `{}`, `services: {}`, or no `services` selects no services; it does not fall back to children.
 - The service-name filter applies across all selected paths, including duplicate names.
 - `prepare_repo` with `repo` alone selects a root checkout.
-- `prepare_repo` with `repo` and `group` prepares one checkout, then uses the group configuration if present, otherwise that checkout's configuration.
+- `prepare_repo` with `repo` and `group` prepares one checkout, then uses its configuration if present, otherwise its direct parent's.
 - `prepare_repo` requires `repo`; `group` alone is rejected.
-- Explicit checkout paths for service tools never select group services.
-- All service tools use the same configuration selection.
+- Explicit checkout paths can select parent services when their own configuration is absent; those services run in the parent directory, not inside the checkout.
+- All preparation and service tools use the same configuration selection.
 
 Before adopting a group configuration, stop any previously started child services using their explicit checkout paths.
 
