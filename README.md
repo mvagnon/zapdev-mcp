@@ -29,7 +29,6 @@ flowchart LR
 - `schemas.ts`: existing MCP input schemas.
 - `servers.ts`: service-tool to CLI argument mapping.
 - `zapdev.ts`: local/npm CLI execution and JSON-to-MCP response translation.
-- `index.test.ts` / `servers.test.ts` / `worktrees.test.ts`: repository, worktree, service lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
 
 ## Environment Variables
@@ -115,14 +114,13 @@ The npm invocation is constrained to compatible zapdev 5.3+ releases within majo
 
 ### Development validation
 
-Build the updated zapdev clone before running the existing MCP tests against it:
+Run static checks and build the MCP server:
 
 ```bash
-ZAPDEV_TEST_PATH=/absolute/path/to/zapdev npm run staticchecks
+npm run staticchecks
 npm run build
 ```
 
-Without `ZAPDEV_TEST_PATH`, integration tests use the compatible published zapdev CLI.
 Publish zapdev 5.3+ before releasing this MCP wrapper.
 
 ## Usage
