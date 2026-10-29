@@ -4,13 +4,14 @@
 # zapdev-mcp
 
 > [!TIP]
-> **Prefer the terminal?** Use **[zapdev](https://github.com/mvagnon/zapdev)** for interactive commits and pull requests.
+> **Prefer the terminal?** Use **[zapdev](https://github.com/mvagnon/zapdev)** for interactive preparation, services, commits and pull requests.
 
 ## Project Introduction
 
 **zapdev-mcp** brings [zapdev](https://github.com/mvagnon/zapdev) workflows to your AI assistant.
 Eight stdio tools prepare disposable checkouts and worktrees, discover and manage services and logs, commit changes, and create pull requests.
-Commit and PR tools use `npx --yes zapdev` by default, or a local clone with `--zapdev-path`.
+All tools delegate to `npx --yes zapdev@^5.3.0` by default, or a compatible local clone with `--zapdev-path`.
+The server only validates MCP inputs, translates CLI arguments, and returns results; repository and service logic lives in zapdev.
 No global installation is needed.
 
 ## Project Architecture
@@ -18,24 +19,16 @@ No global installation is needed.
 ```mermaid
 flowchart LR
   Client["MCP client"] -->|stdio| Server["index.ts"]
-  Server --> Repos["prepare_repo / prepare_worktree"]
-  Server --> Servers["list_services / start_server / stop_server / server_logs"]
-  Servers --> Config["~/.zapdev/config"]
-  Servers --> Systemd["systemd user services"]
-  Servers --> Logs["journald / journalctl --user-unit"]
-  Server --> Commands["commit / pr"]
-  Repos --> Git["Git / GitHub"]
-  Commands --> CLI["npm or local zapdev"]
+  Server --> CLI["npm or local zapdev --non-interactive"]
+  CLI --> Config["~/.zapdev/config and secrets"]
+  CLI --> Systemd["systemd user services and journald"]
   CLI --> Tools["Git, GitHub CLI, Gitleaks, LLM API"]
 ```
 
-- `index.ts`: MCP server, input validation, repository management, and CLI calls.
-- `repositories.ts`: shared Git repository/group selection and worktree source resolution for all path-based tools.
-- `preparation.ts`: shared secret linking and repository/group preparation.
-- `worktrees.ts`: branch-named worktree creation and isolated preparation.
-- `config.ts`: shared repository and group configuration.
-- `servers.ts`: service selection and lifecycle tools.
-- `service-manager.ts`: isolated systemd user units and bounded log access.
+- `index.ts`: MCP tool registration and commit/PR response formatting.
+- `schemas.ts`: existing MCP input schemas.
+- `servers.ts`: service-tool to CLI argument mapping.
+- `zapdev.ts`: local/npm CLI execution and JSON-to-MCP response translation.
 - `index.test.ts` / `servers.test.ts` / `worktrees.test.ts`: repository, worktree, service lifecycle, commit, and PR checks.
 - `dist/index.js`: compiled executable included in the npm package.
 
@@ -50,8 +43,7 @@ flowchart LR
 | `ZD_HOOK_TIMEOUT` | No                  | Deadline per Git hook in seconds; zapdev defaults to `60`                    |
 | `ZD_REPOS_DIR`    | No                  | Absolute clone root and configuration/secrets scope; defaults to `~/.zapdev/repos` |
 
-`ZD_REPOS_DIR` configures this server.
-The other variables configure zapdev.
+These variables are passed through to zapdev.
 The model must support reasoning effort and strict JSON Schema Structured Outputs.
 OpenAI compatibility or JSON mode alone is not enough.
 See [zapdev model configuration](https://github.com/mvagnon/zapdev#model-configuration) for examples.
@@ -108,6 +100,7 @@ The server runs on the client's host, not in a sandbox.
 | `--zapdev-path <absolute-path>` | Use a local zapdev clone instead of invoking zapdev through `npx`; no literal `~` |
 
 Run `npm install` and `npm run build` in the clone first.
+The clone must include the preparation/service commands and `--non-interactive` support from zapdev 5.3+.
 Then extend the MCP client's server arguments:
 
 ```json
@@ -117,7 +110,20 @@ Then extend the MCP client's server arguments:
 The server runs `<clone>/dist/index.js` with its own Node.js executable, preserving its working directory and environment.
 Rebuild the clone after source changes; the MCP does not install dependencies or build it automatically.
 A missing local build returns an error without falling back to npm.
-Omitting the flag preserves the default `npx --yes zapdev` behavior.
+Omitting the flag invokes the compatible published CLI through `npx --yes zapdev@^5.3.0`.
+The npm invocation is constrained to compatible zapdev 5.3+ releases within major version 5.
+
+### Development validation
+
+Build the updated zapdev clone before running the existing MCP tests against it:
+
+```bash
+ZAPDEV_TEST_PATH=/absolute/path/to/zapdev npm run staticchecks
+npm run build
+```
+
+Without `ZAPDEV_TEST_PATH`, integration tests use the compatible published zapdev CLI.
+Publish zapdev 5.3+ before releasing this MCP wrapper.
 
 ## Usage
 
@@ -496,7 +502,7 @@ Commit changes in the enclosing local Git repository, or a group's immediate chi
 Runs:
 
 ```bash
-zapdev commit <path> --yes --no-push
+zapdev commit <path> --non-interactive --no-push --json
 ```
 
 Optional arguments add `--branch=<branch>` and `--type=<type>`.
@@ -505,6 +511,12 @@ Setting `push: true` replaces `--no-push` with `--push` to push after committing
 Without `branch`, commits on the current branch.
 Does not pull or push by default.
 The path is passed directly to zapdev without changing the MCP server's working directory; linked worktree paths are supported.
+
+The CLI JSON is validated and exposed as `commits` and `warnings` in both text and structured content.
+Each commit includes `repo`, `branch`, `message`, and `pushed`; only `pushed: true` confirms a successful push.
+Completed commits and confirmed pushes remain available on partial failure; inspect local and remote state before retrying.
+The original `stdout` JSON and native diagnostics in `stderr` remain available for compatibility.
+Invalid JSON or malformed result fields are reported as errors without discarding those streams.
 
 Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`.
 Append `!` for breaking changes, such as `feat!`.
@@ -522,7 +534,7 @@ Push the current branch and create a GitHub pull request without confirmation fo
 | `branch` | No       | PR target branch, not the working branch; defaults to GitHub's default branch |
 | `closes` | No       | HTTP(S) task URL to append as `Closes <url>` in the description               |
 
-Runs `zapdev pr <path> --yes --cleanup-worktrees --json` with the supplied target branch and task reference, without changing the MCP server's working directory.
+Runs `zapdev pr <path> --non-interactive --cleanup-worktrees --json` with the supplied target branch and task reference, without changing the MCP server's working directory.
 The CLI's JSON result is parsed into `pullRequests`, with each PR's `repo`, `branch`, `url`, `deletedWorktrees` paths and `skippedWorktrees` entries (`path`, `reason`).
 These fields and agent instructions are returned in both text and structured content, including partial results when the CLI exits with an error.
 Deleted worktree paths must no longer be used; retained worktrees require inspection before cleanup, never forced removal.

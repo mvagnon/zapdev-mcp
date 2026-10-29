@@ -22,7 +22,7 @@ test("prepare_repo uses flat checkout names and optional safe group directories"
     ]);
     await client.connect(new StdioClientTransport({
       command: process.execPath,
-      args: ["--import", "tsx", "index.ts"],
+      args: ["--import", "tsx", "index.ts", ...(process.env.ZAPDEV_TEST_PATH ? ["--zapdev-path", process.env.ZAPDEV_TEST_PATH] : [])],
       env: {
         PATH: process.env.PATH ?? "",
         HOME: directory,
@@ -250,7 +250,7 @@ for (const local of [false, true]) test(`commit and pr validate inputs and invok
   const directory = mkdtempSync(join(tmpdir(), "zapdev-mcp-test space-"));
   const clone = join(directory, "zapdev clone");
   const entry = join(clone, "dist", "index.js");
-  const prefix = local ? [] : ["--yes", "zapdev"];
+  const prefix = local ? [] : ["--yes", "zapdev@^5.3.0"];
   const root = join(directory, "repos");
   const repository = join(root, "repo");
   const group = join(directory, "group");
@@ -276,7 +276,7 @@ if (process.argv.includes("--branch=fail")) {
   console.error("commit failed");
   process.exit(1);
 }
-console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), ...(process.argv.includes("--json") && { pullRequests: [] }) }));
+console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), ...(process.argv.includes("--json") && (process.argv.includes("commit") ? { commits: [], warnings: [] } : { pullRequests: [] })) }));
 console.error("scan warning");
 `,
       { mode: 0o755 },
@@ -287,26 +287,14 @@ console.error("scan warning");
       env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, ZD_REPOS_DIR: local ? join(directory, "missing-root") : root },
     }));
 
-    for (const name of ["prepare_worktree", "list_services", "start_server", "stop_server", "server_logs"]) {
-      const rejected = await client.callTool({ name, arguments: { path: join(root, "escape"), ...(name === "prepare_worktree" && { branch: "outside" }) } });
-      assert.equal(rejected.isError, true, `${name} must reject directory symlinks`);
-      const result = await client.callTool({ name, arguments: { path: outside, ...(name === "prepare_worktree" && { branch: "outside" }) } });
-      assert.notEqual(result.isError, true, JSON.stringify(result.content));
-      if (name !== "prepare_worktree") assert.deepEqual(result.structuredContent, { path: realpathSync(outside), services: [] });
-    }
-
     for (const name of ["commit", "pr"]) {
-      for (const path of [join(root, "escape"), join(directory, "empty"), join(directory, "missing")]) {
-        const result = await client.callTool({ name, arguments: { path } });
-        assert.equal(result.isError, true, `${name} must reject ${path}`);
-      }
       for (const path of [outside, join(outside, "src"), worktree]) {
         const result = await client.callTool({ name, arguments: { path } });
         assert.notEqual(result.isError, true, JSON.stringify(result.content));
         const output = result.structuredContent as { stdout: string };
         assert.deepEqual(JSON.parse(output.stdout).args, [
-          ...prefix, name, realpathSync(path === worktree ? worktree : outside), "--yes",
-          ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"]),
+          ...prefix, name, path, "--non-interactive",
+          ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push", "--json"]),
         ]);
       }
     }
@@ -330,18 +318,18 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          ...prefix, "commit", realpathSync(repository), "--yes", push ? "--push" : "--no-push",
+          ...prefix, "commit", repository, "--non-interactive", push ? "--push" : "--no-push", "--json",
           ...(pull ? ["--pull"] : []),
           ...(type === "fix!" ? ["--type=fix!"] : []),
           ...(branch ? [`--branch=${branch}`] : []),
         ],
         cwd: realpathSync(process.cwd()),
+        commits: [], warnings: [],
       });
       assert.equal(output.stderr, "scan warning");
     }
 
     for (const input of [
-      { branch: "bad..branch" },
       { branch: "" },
       { type: "invalid" },
       { pull: "true" },
@@ -372,7 +360,7 @@ console.error("scan warning");
       const output = result.structuredContent as { stdout: string; stderr: string };
       assert.deepEqual(JSON.parse(output.stdout), {
         args: [
-          ...prefix, "pr", realpathSync(repository), "--yes", "--cleanup-worktrees", "--json",
+          ...prefix, "pr", repository, "--non-interactive", "--cleanup-worktrees", "--json",
           ...(input.closes ? [`--closes=${input.closes}`] : []),
           ...(input.branch ? [`--branch=${input.branch}`] : []),
         ],
@@ -383,7 +371,6 @@ console.error("scan warning");
     }
 
     for (const input of [
-      { branch: "bad..branch" },
       { branch: "" },
       { closes: "not-a-url" },
       { closes: "file:///etc/passwd" },
@@ -405,9 +392,9 @@ console.error("scan warning");
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const output = result.structuredContent as { stdout: string };
       assert.deepEqual(JSON.parse(output.stdout), {
-        args: [...prefix, name, realpathSync(group), "--yes", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push"])],
+        args: [...prefix, name, group, "--non-interactive", ...(name === "pr" ? ["--cleanup-worktrees", "--json"] : ["--no-push", "--json"])],
         cwd: realpathSync(process.cwd()),
-        ...(name === "pr" && { pullRequests: [] }),
+        ...(name === "pr" ? { pullRequests: [] } : { commits: [], warnings: [] }),
       });
     }
     if (local) {
@@ -426,7 +413,7 @@ console.error("scan warning");
   }
 });
 
-test("pr exposes deleted and skipped worktrees, including partial failures", async () => {
+test("commit and pr expose structured results, including partial failures and malformed output", async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "zapdev-mcp-pr-")));
   const repository = join(directory, "repo");
   const client = new Client({ name: "pr-result-test", version: "1.0.0" });
@@ -474,6 +461,35 @@ if (error || branch === "nonzero") process.exit(1);
       assert.equal(invalid.structuredContent?.stdout, stdout);
       assert.equal(invalid.structuredContent?.pullRequests, undefined);
       assert.match(JSON.stringify(invalid.content), /invalid.*JSON/i);
+    }
+
+    const commits = [{ repo: repository, branch: "feat/example", message: "feat: search", pushed: false }];
+    for (const branch of ["success", "partial", "empty", "nonzero"]) {
+      const output = { commits: branch === "empty" ? [] : commits, warnings: ["Secret scan unavailable"],
+        ...(branch === "partial" && { error: "second repository: commit failed" }) };
+      writeFileSync(join(directory, "npx"), `#!${process.execPath}
+if (!process.argv.includes("--json")) throw new Error("JSON output required");
+console.log(${JSON.stringify(JSON.stringify(output))});
+console.error("hook diagnostic");
+${branch === "partial" || branch === "nonzero" ? "process.exit(1);" : ""}
+`, { mode: 0o755 });
+      const result = await client.callTool({ name: "commit", arguments: { path: repository, branch } });
+      assert.equal(result.isError === true, branch === "partial" || branch === "nonzero");
+      assert.deepEqual(result.structuredContent?.commits, output.commits);
+      assert.deepEqual(result.structuredContent?.warnings, output.warnings);
+      assert.equal(result.structuredContent?.stderr, "hook diagnostic");
+      assert.equal(result.structuredContent?.stdout, JSON.stringify(output));
+      if (branch === "partial") assert.equal(result.structuredContent?.error, output.error);
+      if (branch === "nonzero") assert.equal(typeof result.structuredContent?.error, "string");
+      assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(result.structuredContent) }]);
+    }
+    for (const stdout of ["not JSON", JSON.stringify({ commits: [{ ...commits[0], pushed: "false" }], warnings: [] })]) {
+      writeFileSync(join(directory, "npx"), `#!${process.execPath}\nconsole.log(${JSON.stringify(stdout)});\n`, { mode: 0o755 });
+      const result = await client.callTool({ name: "commit", arguments: { path: repository } });
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent?.stdout, stdout);
+      assert.equal(result.structuredContent?.commits, undefined);
+      assert.match(JSON.stringify(result.content), /invalid.*JSON/i);
     }
   } finally {
     await client.close();

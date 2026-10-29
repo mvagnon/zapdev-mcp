@@ -36,7 +36,7 @@ test("services return compact actions and scoped journal diagnostics", async () 
     clients.push(client);
     await client.connect(new StdioClientTransport({
       command: process.execPath,
-      args: ["--import", import.meta.resolve("tsx"), join(process.cwd(), "index.ts")],
+      args: ["--import", import.meta.resolve("tsx"), join(process.cwd(), "index.ts"), ...(process.env.ZAPDEV_TEST_PATH ? ["--zapdev-path", process.env.ZAPDEV_TEST_PATH] : [])],
       cwd,
       env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, ZD_REPOS_DIR: root, TEST_UNITS: stateFile },
     }));

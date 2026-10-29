@@ -1,24 +1,15 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { parseArgs, promisify } from "node:util";
+import { parseArgs } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { prepareSelection } from "./preparation.js";
-import { git, repositorySelectionSchema, selectRepositories } from "./repositories.js";
+import { repositoryPath, repositorySelectionSchema } from "./schemas.js";
 import { registerServerTools } from "./servers.js";
-import { prepareWorktree } from "./worktrees.js";
+import { callWorkspaceCommand, configureZapdev, runZapdev } from "./zapdev.js";
 
-const exec = promisify(execFile);
 const { values } = parseArgs({ options: { "zapdev-path": { type: "string" } } });
-const zapdevPath = values["zapdev-path"];
-if (zapdevPath !== undefined && !isAbsolute(zapdevPath)) {
-  throw new Error("Expected --zapdev-path to be an absolute path to a local zapdev clone (no ~).");
-}
-const zapdevEntry = zapdevPath === undefined ? undefined : join(zapdevPath, "dist", "index.js");
+configureZapdev(values["zapdev-path"]);
 
 const pullRequestResultSchema = z.object({
   pullRequests: z.array(z.object({
@@ -31,51 +22,30 @@ const pullRequestResultSchema = z.object({
   error: z.string().optional(),
 });
 
+const commitResultSchema = z.object({
+  commits: z.array(z.object({ repo: z.string(), branch: z.string(), message: z.string(), pushed: z.boolean() })),
+  warnings: z.array(z.string()),
+  error: z.string().optional(),
+});
+
 /** Run local or npm zapdev with a repository path, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
-  const output: Partial<z.infer<typeof pullRequestResultSchema>> & {
+  const output: Partial<z.infer<typeof pullRequestResultSchema> & z.infer<typeof commitResultSchema>> & {
     stdout: string; stderr: string; instructions?: string;
   } = { stdout: "", stderr: "" };
-  try {
-    const selection = await selectRepositories(path);
-    if (selection.repositories.length === 0) throw new Error(`No Git repository found in ${selection.path} or its immediate children.`);
-    path = selection.path;
-    if (branch !== undefined) await git(path, "check-ref-format", "--branch", branch);
-    if (zapdevEntry !== undefined && !statSync(zapdevEntry, { throwIfNoEntry: false })?.isFile()) {
-      throw new Error(`Local zapdev build not found at ${zapdevEntry}. Run npm install and npm run build in the zapdev clone.`);
-    }
-    const { stdout, stderr } = await exec(
-      zapdevEntry === undefined ? "npx" : process.execPath,
-      [...(zapdevEntry === undefined ? ["--yes", "zapdev"] : [zapdevEntry]), args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])],
-      {
-        env: {
-          ...process.env,
-          GIT_TERMINAL_PROMPT: "0",
-          GCM_INTERACTIVE: "Never",
-          GH_PROMPT_DISABLED: "1",
-        },
-        timeout: 180_000,
-      },
-    );
-    output.stdout = stdout.trim();
-    output.stderr = stderr.trim();
-  } catch (error) {
-    output.error = error instanceof Error ? error.message : String(error);
-    if (error instanceof Error) {
-      if ("stdout" in error && typeof error.stdout === "string") output.stdout = error.stdout.trim();
-      if ("stderr" in error && typeof error.stderr === "string") output.stderr = error.stderr.trim();
-    }
-  }
-  if (args[0] === "pr" && (output.stdout || output.error === undefined)) {
+  Object.assign(output, await runZapdev([args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])]));
+  if (output.stdout || output.error === undefined) {
     try {
-      const result = pullRequestResultSchema.parse(JSON.parse(output.stdout));
-      output.pullRequests = result.pullRequests;
-      if (result.error !== undefined) output.error = result.error;
-      output.instructions = "Deleted worktree paths no longer exist; do not use them as a working directory. " +
-        "Skipped worktrees were retained: inspect their paths and reasons before cleanup; never force removal. " +
-        "If an error is reported, check remote PR state before retrying; partial results are preserved.";
+      const schema = args[0] === "commit" ? commitResultSchema : pullRequestResultSchema;
+      Object.assign(output, schema.parse(JSON.parse(output.stdout)));
+      output.instructions = args[0] === "commit"
+        ? "Completed commits are preserved on failure. A pushed value of true confirms a successful push; " +
+          "otherwise a push is not confirmed. If an error is reported, inspect local and remote state before retrying."
+        : "Deleted worktree paths no longer exist; do not use them as a working directory. " +
+          "Skipped worktrees were retained: inspect their paths and reasons before cleanup; never force removal. " +
+          "If an error is reported, check remote PR state before retrying; partial results are preserved.";
     } catch {
-      output.error ??= "Invalid JSON result from zapdev pr; inspect stdout/stderr and remote state before retrying.";
+      output.error ??= `Invalid JSON result from zapdev ${args[0]}; inspect stdout/stderr and ${args[0] === "commit" ? "local and remote" : "remote"} state before retrying.`;
     }
   }
   return {
@@ -84,11 +54,6 @@ async function zapdev(path: string, args: [string, ...string[]], branch?: string
     structuredContent: output,
   };
 }
-
-const repositoryPath = z
-  .string()
-  .refine(isAbsolute, "Expected an absolute repository path.")
-  .describe("Absolute existing Git repository, worktree, subdirectory or group path anywhere on the host (no ~).");
 
 const server = new McpServer({ name: "zapdev-mcp", version: "1.0.0" });
 
@@ -111,21 +76,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   async ({ repo, group, branch }) => {
-    try {
-      const output = await prepareSelection({ repo, group, branch });
-      return {
-        content: [{ type: "text", text: JSON.stringify(output) }],
-        structuredContent: output,
-      };
-    } catch (error) {
-      const output = {
-        error: error instanceof Error ? error.message : String(error),
-      };
-      return {
-        isError: true,
-        content: [{ type: "text", text: JSON.stringify(output) }],
-      };
-    }
+    return callWorkspaceCommand(["prepare-repo", repo, ...(group ? [`--group=${group}`] : []), ...(branch ? [`--branch=${branch}`] : [])]);
   },
 );
 
@@ -145,14 +96,7 @@ server.registerTool(
     }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
-  async (input) => {
-    const output = await prepareWorktree(input);
-    return {
-      ...(output.error !== undefined && { isError: true }),
-      content: [{ type: "text", text: JSON.stringify(output) }],
-      structuredContent: output,
-    };
-  },
+  async ({ path, branch }) => callWorkspaceCommand(["prepare-worktree", path, `--branch=${branch}`]),
 );
 
 registerServerTools(server);
@@ -161,7 +105,8 @@ server.registerTool(
   "commit",
   {
     description:
-      "Commit all changes in the enclosing repository or immediate child repositories via zapdev; pull and push only when requested (both default: false). " +
+      "Commit all changes in the enclosing repository or immediate child repositories via zapdev --json; pull and push only when requested (both default: false). " +
+      "Returns completed commits, confirmed push results and warnings, including partial results on failure; inspect state before retrying. " +
       "Requires ZD_* configuration; sends commit context to the configured LLM.",
     inputSchema: z
       .object({
@@ -189,7 +134,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   async ({ path, branch, type, pull, push }) => zapdev(path, [
-    "commit", "--yes", push ? "--push" : "--no-push",
+    "commit", "--non-interactive", push ? "--push" : "--no-push", "--json",
     ...(pull ? ["--pull"] : []),
     ...(type === "auto" ? [] : [`--type=${type}`]),
   ], branch),
@@ -222,7 +167,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   async ({ path, branch, closes }) => zapdev(path, [
-    "pr", "--yes", "--cleanup-worktrees", "--json",
+    "pr", "--non-interactive", "--cleanup-worktrees", "--json",
     ...(closes ? [`--closes=${closes}`] : []),
   ], branch),
 );

@@ -49,8 +49,9 @@ test("prepare_worktree selects one repository or all group children and prepares
     }));
     await client.connect(new StdioClientTransport({
       command: process.execPath,
-      args: ["--import", "tsx", "index.ts"],
-      env: { PATH: process.env.PATH ?? "", HOME: directory, ZD_REPOS_DIR: root },
+      args: ["--import", "tsx", "index.ts", ...(process.env.ZAPDEV_TEST_PATH ? ["--zapdev-path", process.env.ZAPDEV_TEST_PATH] : [])],
+      env: { PATH: process.env.PATH ?? "", HOME: directory, ZD_REPOS_DIR: root,
+        ZD_URL: "http://localhost:1/v1/chat/completions", ZD_MODEL: "test", ZD_EFFORT: "low" },
     }));
 
     const branch = "feat/isolated";
@@ -59,6 +60,23 @@ test("prepare_worktree selects one repository or all group children and prepares
     assert.ok(tool);
     assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ["branch", "path"]);
     mkdirSync(workspaceRoot, { recursive: true });
+    const alias = join(directory, "source-alias");
+    symlinkSync(outside, alias);
+    const emptyGroup = join(directory, "empty-group");
+    mkdirSync(emptyGroup);
+    for (const name of ["prepare_worktree", "list_services", "start_server", "stop_server", "server_logs", "commit", "pr"]) {
+      const rejected = await client.callTool({ name, arguments: { path: alias, ...(name === "prepare_worktree" && { branch: "outside" }) } });
+      assert.equal(rejected.isError, true, `${name} must reject directory symlinks`);
+    }
+    for (const name of ["commit", "pr"]) {
+      for (const path of [emptyGroup, join(directory, "missing")]) {
+        const rejected = await client.callTool({ name, arguments: { path } });
+        assert.equal(rejected.isError, true, `${name} must reject ${path}`);
+      }
+      const rejected = await client.callTool({ name, arguments: { path: standalone, branch: "bad..branch" } });
+      assert.equal(rejected.isError, true, `${name} must reject invalid branch names`);
+      assert.match(JSON.stringify(rejected.content), /branch/);
+    }
     const foreign = join(workspaceRoot, "foreign");
     git(outside, "worktree", "add", "--quiet", "-b", "foreign", foreign);
     const escapedConfig = join(directory, ".zapdev", "outside");
