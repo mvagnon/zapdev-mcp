@@ -9,7 +9,7 @@
 ## Project Introduction
 
 **zapdev-mcp** brings [zapdev](https://github.com/mvagnon/zapdev) workflows to your AI assistant.
-Eight stdio tools prepare disposable checkouts and worktrees, discover and manage services and logs, commit changes, and create pull requests.
+Nine stdio tools prepare disposable checkouts and worktrees, update repositories, discover and manage services and logs, commit changes, and create pull requests.
 All tools delegate to `npx --yes zapdev@^5.3.0` by default, or a compatible local clone with `--zapdev-path`.
 The server only validates MCP inputs, translates CLI arguments, and returns results; repository and service logic lives in zapdev.
 No global installation is needed.
@@ -99,7 +99,7 @@ The server runs on the client's host, not in a sandbox.
 | `--zapdev-path <absolute-path>` | Use a local zapdev clone instead of invoking zapdev through `npx`; no literal `~` |
 
 Run `npm install` and `npm run build` in the clone first.
-The clone must include the preparation/service commands and `--non-interactive` support from zapdev 5.3+.
+The clone must include `update-repo`, the preparation/service commands and `--non-interactive` support from zapdev 5.3+.
 Then extend the MCP client's server arguments:
 
 ```json
@@ -217,6 +217,23 @@ Refresh overwrites tracked changes and removes untracked files and directories.
 Ignored files are preserved.
 Never prepare a checkout containing work you want to keep.
 Git authentication must work without prompts.
+
+### `update_repo`
+
+Fetch and fast-forward the enclosing repository or immediate child repositories without discarding local work.
+
+| Argument | Required | Description |
+| -------- | -------- | ----------- |
+| `path` | Yes | Absolute repository, worktree, subdirectory or group path |
+| `branch` | No | Branch to switch to and update in every selected repository; defaults to each current branch |
+
+Example: `{"path":"/srv/repos/my-group","branch":"main"}`.
+Uses the selected branch's upstream remote and branch, otherwise `origin` or the only remote and the same branch name.
+A missing local branch is created from the remote branch.
+Preserves local commits and staged, unstaged and untracked changes; refuses divergent histories and changes that block switching or fast-forwarding.
+Never resets, cleans, stashes, rebases or pushes, and does not run preparation commands or link secrets.
+Stops at the first failure; completed updates and any successful branch switch are not rolled back.
+Returns completed repository `paths` and an optional `error`; inspect state before retrying.
 
 ### `prepare_worktree`
 

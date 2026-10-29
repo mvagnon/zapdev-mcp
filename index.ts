@@ -81,6 +81,23 @@ server.registerTool(
 );
 
 server.registerTool(
+  "update_repo",
+  {
+    description:
+      "Update the enclosing repository or immediate child repositories from their remotes using fast-forward only. " +
+      "Defaults to each current branch; an explicit branch applies to every selected repository and is created from its remote if needed. " +
+      "Preserves local commits and staged, unstaged and untracked changes; fails if switching or updating would overwrite them, or histories diverge. " +
+      "Never resets, cleans, stashes, rebases or pushes. Returns updated paths and preserves completed updates on failure; inspect state before retrying.",
+    inputSchema: z.object({
+      path: repositoryPath,
+      branch: z.string().min(1).optional().describe("Branch to switch to and update in every selected repository; default: each current branch."),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  async ({ path, branch }) => callWorkspaceCommand(["update-repo", path, ...(branch !== undefined ? [`--branch=${branch}`] : [])]),
+);
+
+server.registerTool(
   "prepare_worktree",
   {
     description:
