@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.0.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.4.0...v3.0.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* Remove legacy modules and introduce schemas and zapdev bootstrap.
+
+### Features
+
+* **path-handling:** Relax path validation to allow absolute host paths and introduce repositoryRelativePath for source resolution ([385477d](https://github.com/mvagnon/zapdev-mcp/commit/385477debcb041b3099f27a4389d5384d87a00af))
+* **update_repo:** Add update_repo tool to update repositories with safe fast-forward only while preserving local changes. ([b304700](https://github.com/mvagnon/zapdev-mcp/commit/b3047000bc0958c0a7a3950fd042f03fdd3b145c))
+
+
+### Bug Fixes
+
+* **worktrees:** Remove instructions field from prepare_worktree result; return only paths. ([8d1296d](https://github.com/mvagnon/zapdev-mcp/commit/8d1296dc45385dcd52d67d3c6c4366d9d60287e0))
+* **zapdev:** Use stdout from runZapdev result for parsing CLI JSON instead of the previous output.stdout usage ([bfbe219](https://github.com/mvagnon/zapdev-mcp/commit/bfbe21916a81e516c9ccda946088432fe766e333))
+
+
+### Code Refactoring
+
+* Remove legacy modules and introduce schemas and zapdev bootstrap. ([42f910a](https://github.com/mvagnon/zapdev-mcp/commit/42f910a2e2fd271ddda9e6dd3fb05528ba4abc04))
+
 ## [2.4.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.3.0...v2.4.0) (2026-10-25)
 
 
