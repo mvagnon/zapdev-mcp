@@ -30,14 +30,14 @@ const commitResultSchema = z.object({
 
 /** Run local or npm zapdev with a repository path, returning CLI output or an MCP error. */
 async function zapdev(path: string, args: [string, ...string[]], branch?: string): Promise<CallToolResult> {
+  const { stdout, ...execution } = await runZapdev([args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])]);
   const output: Partial<z.infer<typeof pullRequestResultSchema> & z.infer<typeof commitResultSchema>> & {
-    stdout: string; stderr: string; instructions?: string;
-  } = { stdout: "", stderr: "" };
-  Object.assign(output, await runZapdev([args[0], path, ...args.slice(1), ...(branch ? [`--branch=${branch}`] : [])]));
-  if (output.stdout || output.error === undefined) {
+    stderr: string; instructions?: string;
+  } = execution;
+  if (stdout || output.error === undefined) {
     try {
       const schema = args[0] === "commit" ? commitResultSchema : pullRequestResultSchema;
-      Object.assign(output, schema.parse(JSON.parse(output.stdout)));
+      Object.assign(output, schema.parse(JSON.parse(stdout)));
       output.instructions = args[0] === "commit"
         ? "Completed commits are preserved on failure. A pushed value of true confirms a successful push; " +
           "otherwise a push is not confirmed. If an error is reported, inspect local and remote state before retrying."

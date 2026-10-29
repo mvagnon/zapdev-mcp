@@ -5,7 +5,7 @@ import { z } from "zod";
 export const repositoryPath = z.string().refine(isAbsolute, "Expected an absolute repository path.")
   .describe("Absolute existing Git repository, worktree, subdirectory or group path anywhere on the host (no ~).");
 
-/** Keep the existing MCP repository/group input contract and normalization. */
+/** Validate and normalize GitHub repository and optional group inputs. */
 export const repositorySelectionSchema = z.object({
   repo: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/)
     .transform(value => value.replace(/\.git$/, "").toLowerCase())
@@ -15,7 +15,7 @@ export const repositorySelectionSchema = z.object({
   ).describe("Group folder name, not a path. Omit or leave empty for a root checkout."),
 }).strict();
 
-/** Existing service tool inputs, including the server working-directory default. */
+/** Service tool inputs, including the server working-directory default. */
 export const serviceSelectionSchema = z.object({
   path: z.string().optional().transform(value => value === "" ? undefined : value)
     .refine(value => value === undefined || isAbsolute(value), "Expected an absolute checkout or group path.")

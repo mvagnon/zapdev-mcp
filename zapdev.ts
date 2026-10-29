@@ -8,7 +8,7 @@ import { z } from "zod";
 const exec = promisify(execFile);
 let entry: string | undefined;
 
-/** Configure the existing local-clone override without an npm fallback. */
+/** Configure the local-clone override without an npm fallback. */
 export function configureZapdev(path: string | undefined): void {
   if (path !== undefined && !isAbsolute(path)) throw new Error("Expected --zapdev-path to be an absolute path to a local zapdev clone (no ~).");
   entry = path === undefined ? undefined : join(path, "dist", "index.js");
@@ -38,7 +38,7 @@ export async function runZapdev(args: string[]): Promise<{ stdout: string; stder
   return output;
 }
 
-/** Translate a CLI workspace result into the unchanged MCP text/structured response contract. */
+/** Translate CLI workspace JSON into MCP text and structured results. */
 export async function callWorkspaceCommand(args: string[]): Promise<CallToolResult> {
   const execution = await runZapdev([...args, "--non-interactive", "--json"]);
   let output: Record<string, unknown>;

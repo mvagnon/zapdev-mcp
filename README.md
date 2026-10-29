@@ -159,8 +159,6 @@ Use a full path, not a literal `~`.
 
 With `group: "my-group"`, the checkout lives in `<ZD_REPOS_DIR>/my-group/owner__repo`.
 Other checkouts are not moved or deleted.
-Rename existing `owner$repo` or `owner-repo` checkout, secret, and configuration folders to `owner__repo` to reuse them; no automatic migration or legacy-name fallback is performed.
-Stop services before renaming checkouts; update hard-coded paths and recreate secret symlinks whose targets changed before preparing again.
 
 | Argument | Required | Description                                                               |
 | -------- | -------- | ------------------------------------------------------------------------- |
@@ -530,8 +528,8 @@ The path is passed directly to zapdev without changing the MCP server's working 
 The CLI JSON is validated and exposed as `commits` and `warnings` in both text and structured content.
 Each commit includes `repo`, `branch`, `message`, and `pushed`; only `pushed: true` confirms a successful push.
 Completed commits and confirmed pushes remain available on partial failure; inspect local and remote state before retrying.
-The original `stdout` JSON and native diagnostics in `stderr` remain available for compatibility.
-Invalid JSON or malformed result fields are reported as errors without discarding those streams.
+Native diagnostics remain available in `stderr`; the raw CLI JSON is not duplicated in the response.
+Invalid JSON or malformed result fields are reported as errors.
 
 Supported types: `auto`, `feat`, `fix`, `deps`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`.
 Append `!` for breaking changes, such as `feat!`.
@@ -553,7 +551,7 @@ Runs `zapdev pr <path> --non-interactive --cleanup-worktrees --json` with the su
 The CLI's JSON result is parsed into `pullRequests`, with each PR's `repo`, `branch`, `url`, `deletedWorktrees` paths and `skippedWorktrees` entries (`path`, `reason`).
 These fields and agent instructions are returned in both text and structured content, including partial results when the CLI exits with an error.
 Deleted worktree paths must no longer be used; retained worktrees require inspection before cleanup, never forced removal.
-The original `stdout` and diagnostics in `stderr` remain available for compatibility; invalid JSON is reported as an error without discarding them.
+Native diagnostics remain available in `stderr`; invalid JSON is reported as an error.
 Requires a clean working tree and authenticated GitHub CLI.
 Full branch commit messages are sent to the configured LLM to generate the title.
 The description is built from the commits.
