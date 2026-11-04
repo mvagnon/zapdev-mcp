@@ -54,6 +54,6 @@ export async function callWorkspaceCommand(args: string[]): Promise<CallToolResu
   return {
     ...(isError && { isError: true }),
     content: [{ type: "text", text: JSON.stringify(output) }],
-    ...((!isError || "paths" in output || "services" in output) && { structuredContent: output }),
+    ...((!isError || "path" in output || "services" in output) && { structuredContent: output }),
   };
 }

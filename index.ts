@@ -62,6 +62,7 @@ server.registerTool(
   {
     description:
       "Clone/reset a disposable GitHub checkout under ZD_REPOS_DIR (default ~/.zapdev/repos). Requires repo; group is optional. " +
+      "Returns a single absolute path: the group directory when group is provided, otherwise the repository checkout. " +
       "Call only when the user explicitly requests preparing or resetting this checkout; never call automatically as a prerequisite for another task. " +
       "Resolves configuration and secrets independently: uses the repository's resources if present, otherwise its direct parent's, without merging. " +
       "Destructive: discards tracked edits and untracked non-ignored files. Editing secret symlinks changes source secrets; keep links Git-ignored.",
@@ -88,8 +89,8 @@ server.registerTool(
       "A repository path selects only that repository, even inside a group; a group path selects its immediate child repositories. " +
       "Creates the same new branch in every selected repository; never resets sources or overwrites existing branches or paths. " +
       "For sources below ZD_REPOS_DIR, resolves configuration and secrets independently: repo then direct parent, or group then immediate child repos, without merging or further fallback. External sources skip secrets and preparation commands. " +
-      "Returns the created worktree paths. Secret links share source files; keep them Git-ignored. " +
-      "Failures retain completed worktrees and report their paths; inspect them before retrying.",
+      "Returns a single absolute path: the repository worktree for a repository input, or the workspace containing worktrees for a group input. Secret links share source files; keep them Git-ignored. " +
+      "Failures retain completed worktrees and include path when any were created; inspect the directory before retrying.",
     inputSchema: z.object({
       path: repositoryPath,
       branch: z.string().min(1).describe("New local branch; its workspace directory replaces / with __ without changing the branch name."),
