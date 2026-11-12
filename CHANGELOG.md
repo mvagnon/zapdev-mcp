@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.0.0](https://github.com/mvagnon/zapdev-mcp/compare/v3.0.0...v4.0.0) (2026-11-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* Remove update_repo command from the tool registry.
+
+### Bug Fixes
+
+* Return a single absolute path for the selected input: the repository worktree or group workspace. ([b68a459](https://github.com/mvagnon/zapdev-mcp/commit/b68a4591ff6c07b5f83d9f4e103c4445fe277fbe))
+
+
+### Code Refactoring
+
+* Remove update_repo command from the tool registry. ([9596869](https://github.com/mvagnon/zapdev-mcp/commit/95968692524cb5d67c968aa982f582b1b1b9a611))
+
 ## [3.0.0](https://github.com/mvagnon/zapdev-mcp/compare/v2.4.0...v3.0.0) (2026-10-29)
 
 
